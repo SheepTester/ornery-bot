@@ -611,6 +611,7 @@ name = "ornery-bot"
 version = "0.1.0"
 dependencies = [
  "dotenv",
+ "serde_json",
  "serenity",
 ]
 
