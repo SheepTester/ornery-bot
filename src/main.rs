@@ -1,10 +1,10 @@
 use dotenv::dotenv;
 use serenity::{
-    async_trait,
     model::{channel::Message, gateway::Ready},
     prelude::*,
 };
 use std::env;
+use async_trait::async_trait;
 
 struct Handler;
 
@@ -40,6 +40,8 @@ impl EventHandler for Handler {
 
 #[tokio::main]
 async fn main() {
+    dotenv().ok();
+
     // Configure the client with your Discord bot token in the environment.
     let token = env::var("DISCORD_TOKEN").expect("Expected a token in the environment");
 
