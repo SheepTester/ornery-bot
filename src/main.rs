@@ -3,39 +3,31 @@ use serenity::{
     model::{channel::Message, gateway::Ready, id::GuildId},
     prelude::*,
 };
-use std::{env, sync::{Mutex, MutexGuard, mpsc::{channel, Sender, Receiver}}, collections::HashMap};
+use std::{collections::HashMap, env, sync::Mutex};
 
 type MaybeError = serenity::Result<()>;
 
+#[derive(Default)]
 struct GuildData {
     count: u32,
 }
 
+struct GuildDataKey;
+
+impl TypeMapKey for GuildDataKey {
+    type Value = HashMap<GuildId, GuildData>;
+}
+
 struct Handler {
     count: Mutex<u32>,
-    // guild_data_load: (Sender<GuildId>, Receiver<GuildData>),
-    // guild_data: Mutex<HashMap<GuildId, GuildData>>,
 }
 
 impl Handler {
-    // fn access_guild_data(&self, id: GuildId) -> &mut GuildData {
-    //     {
-    //         let mut map = self.guild_data.lock().unwrap();
-    //         match map.get_mut(id) {
-    //             Some(data) => data,
-    //             None => (),
-    //         }
-    //     }
-    //     let (requestGuildData, guildDataDeliveries) = self.guild_data_load;
-    //     requestGuildData(id);
-    //     let guild_data =
-    //     let mut map = self.guild_data.lock().unwrap();
-    // }
-
     fn message(&self, ctx: Context, msg: Message) -> MaybeError {
         let current_user = ctx.http.get_current_user()?;
         if msg.mentions_user_id(&current_user) {
-            msg.channel_id.say(&ctx.http, "<:ping:719277539113041930>")?;
+            msg.channel_id
+                .say(&ctx.http, "<:ping:719277539113041930>")?;
         } else if msg.content == "ok moofy" {
             // https://doc.rust-lang.org/book/ch16-03-shared-state.html#sharing-a-mutext-between-multiple-threads
             let count = {
@@ -44,6 +36,24 @@ impl Handler {
                 count
             };
             msg.channel_id.say(&ctx.http, count)?;
+        } else if msg.content == "kk moofy" {
+            // https://docs.rs/serenity/0.8.7/serenity/client/struct.Client.html#structfield.data
+            match msg.guild_id {
+                Some(guild_id) => {
+                    let count = {
+                        let mut data = ctx.data.write();
+                        let map = data.get_mut::<GuildDataKey>().unwrap();
+                        let guild_data =
+                            map.entry(guild_id).or_insert_with(|| GuildData::default());
+                        guild_data.count += 1;
+                        guild_data.count
+                    };
+                    msg.channel_id.say(&ctx.http, format!("{}ish", count))?;
+                }
+                None => {
+                    msg.channel_id.say(&ctx.http, "server only hehehe")?;
+                }
+            }
         } else if msg.content == "moofy ponder" {
             msg.channel_id.say(&ctx.http, "let me think")?;
             std::thread::sleep(std::time::Duration::from_millis(5000));
@@ -80,29 +90,18 @@ fn main() {
     // Configure the client with your Discord bot token in the environment.
     let token = env::var("DISCORD_TOKEN").expect("Expected a token in the environment");
 
-    // let (requestGuildData, guildDataRequests) = mpsc::channel();
-    // let (sendGuildData, guildDataDeliveries) = mpsc::channel();
-    // thread::spawn(move || {
-    //     for request in guildDataRequests {
-    //         // TODO: Read from or save to file
-    //         guildDataDeliveries.send(GuildData {
-    //             count: 0,
-    //         }).unwrap();
-    //     }
-    // });
-
-    // Create a new instance of the Client, logging in as a bot. This will
-    // automatically prepend your bot token with "Bot ", which is a requirement
-    // by Discord for bot users.
     let mut client = Client::new(
         &token,
         Handler {
             count: Mutex::new(0),
-            // guild_data_load: (requestGuildData, guildDataDeliveries),
-            // guild_data: Mutex::new(HashMap::new()),
         },
     )
     .expect("Err creating client");
+
+    {
+        let mut data = client.data.write();
+        data.insert::<GuildDataKey>(HashMap::default());
+    }
 
     // Finally, start a single shard, and start listening to events.
     //
