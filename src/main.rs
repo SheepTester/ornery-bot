@@ -270,9 +270,31 @@ impl Handler {
                         }
 
                         GuildCommand::Whois(user) => {
-                            let id = &user;
-                            match guild_data.get_whois_entry_by_id(&user) {
-                                Some(entry) => {
+                            match guild_data
+                                .get_whois_entry_by_id(&user)
+                                .map(|entry| (user.clone(), entry))
+                                .or_else(|| {
+                                    let search = user.to_lowercase();
+                                    guild_id.members(&ctx, Some(1000), None).ok().and_then(|members| {
+                                        println!("found {:?}", members);
+                                        members.iter().find_map(|member| {
+                                            let user_id = member.user_id().to_string();
+                                            if member
+                                                .nick
+                                                .as_ref()
+                                                .filter(|nick| nick.to_lowercase() == search)
+                                                .is_some()
+                                            {
+                                                guild_data
+                                                    .get_whois_entry_by_id(&user_id)
+                                                    .map(|entry| (user_id, entry))
+                                            } else {
+                                                None
+                                            }
+                                        })
+                                    })
+                                }) {
+                                Some((id, entry)) => {
                                     msg.channel_id.send_message(&ctx.http, |message| {
                                         message.embed(|embed| {
                                             embed.title("Watchlist | fbi.gov");
@@ -280,7 +302,9 @@ impl Handler {
                                                 "Information about Discord user <@{}>",
                                                 id
                                             ));
-                                            for (header, value) in guild_data.whois_headers.iter().zip(entry.iter()) {
+                                            for (header, value) in
+                                                guild_data.whois_headers.iter().zip(entry.iter())
+                                            {
                                                 if !value.is_empty() {
                                                     embed.field(header, value, true);
                                                 }
@@ -291,11 +315,11 @@ impl Handler {
                                         message
                                     })?;
                                 }
-                                None => {
-                                    msg.channel_id
-                                        .say(&ctx.http, format!("idk who {} is lmao", user))?;
+                                _ => {
+                                    msg.channel_id.say(&ctx.http, "idk who that is lmao")?;
                                 }
                             }
+                            println!("end {}", user);
                         }
 
                         GuildCommand::WhoisFetch(url) => {
