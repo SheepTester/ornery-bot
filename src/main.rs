@@ -88,7 +88,9 @@ impl GuildData {
                     .map(|str| String::from(str)),
                 whois_headers: json
                     .get("whois_headers")
-                    .and_then(|value| serde_value_to_vec(value, |val| val.as_str().map(|str| String::from(str))))
+                    .and_then(|value| {
+                        serde_value_to_vec(value, |val| val.as_str().map(|str| String::from(str)))
+                    })
                     .unwrap_or_else(|| Vec::new()),
                 whois_data: json
                     .get("whois_data")
@@ -148,6 +150,20 @@ impl GuildData {
         )?;
         Ok(())
     }
+
+    fn get_whois_entry_by_id(&self, id: &String) -> Option<&Vec<String>> {
+        self.whois_headers
+            .iter()
+            .position(|header| header.to_ascii_lowercase().contains("id"))
+            .and_then(|id_index| {
+                self.whois_data
+                    .iter()
+                    .find(|entry| match entry.get(id_index) {
+                        Some(entry_id) => entry_id == id,
+                        None => false,
+                    })
+            })
+    }
 }
 
 struct GuildDataKey;
@@ -166,6 +182,7 @@ enum Command {
     Ping,
     GlobalCount,
     Ponder,
+    WhoisOld,
     GuildCommand(GuildCommand),
     Ignore,
 }
@@ -178,8 +195,10 @@ impl Command {
             "moofy ponder" => Self::Ponder,
             _ => {
                 if msg.content.starts_with(":whois") {
-                    let (_, user) = msg.content.split_at(":whois".len());
-                    Self::GuildCommand(GuildCommand::Whois(String::from(user)))
+                    Self::WhoisOld
+                } else if msg.content.starts_with("bruh who is") {
+                    let (_, user) = msg.content.split_at("bruh who is".len());
+                    Self::GuildCommand(GuildCommand::Whois(String::from(user.trim())))
                 } else if msg.content.starts_with("moofy go fetch") {
                     let (_, url) = msg.content.split_at("moofy go fetch".len());
                     Self::GuildCommand(GuildCommand::WhoisFetch(String::from(url)))
@@ -223,6 +242,13 @@ impl Handler {
                 msg.channel_id.say(&ctx.http, "done")?;
             }
 
+            Command::WhoisOld => {
+                msg.channel_id.say(
+                    &ctx.http,
+                    "-5 karma. im emo now so pls use `bruh who is <name>`",
+                )?;
+            }
+
             Command::Ignore => (),
 
             // Requires guild
@@ -244,8 +270,32 @@ impl Handler {
                         }
 
                         GuildCommand::Whois(user) => {
-                            msg.channel_id
-                                .say(&ctx.http, format!("idk who {} is lmao", user))?;
+                            let id = &user;
+                            match guild_data.get_whois_entry_by_id(&user) {
+                                Some(entry) => {
+                                    msg.channel_id.send_message(&ctx.http, |message| {
+                                        message.embed(|embed| {
+                                            embed.title("Watchlist | fbi.gov");
+                                            embed.description(format!(
+                                                "Information about Discord user <@{}>",
+                                                id
+                                            ));
+                                            for (header, value) in guild_data.whois_headers.iter().zip(entry.iter()) {
+                                                if !value.is_empty() {
+                                                    embed.field(header, value, true);
+                                                }
+                                            }
+                                            embed
+                                        });
+                                        message.content("found this on google idk hope it helps");
+                                        message
+                                    })?;
+                                }
+                                None => {
+                                    msg.channel_id
+                                        .say(&ctx.http, format!("idk who {} is lmao", user))?;
+                                }
+                            }
                         }
 
                         GuildCommand::WhoisFetch(url) => {
