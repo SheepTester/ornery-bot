@@ -9,5 +9,6 @@ edition = "2018"
 [dependencies]
 serenity = "0.8"
 dotenv = "0.15.0"
-# reqwest = "0.10.8"
+reqwest = "0.10.8"
 serde_json = "1.0"
+csv = "1.1"

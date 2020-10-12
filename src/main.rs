@@ -1,5 +1,6 @@
 use dotenv::dotenv;
-use serde_json::{from_reader, json, Value};
+use reqwest::{blocking::get, Url};
+use serde_json::{from_reader, map::Map, Number, Value};
 use serenity::{
     model::{channel::Message, gateway::Ready, id::GuildId, prelude::CurrentUser},
     prelude::*,
@@ -9,14 +10,15 @@ use std::{
     env,
     fs::{create_dir_all, File},
     sync::Mutex,
-    time::{Duration, Instant},
 };
 
 #[derive(Debug)]
 enum DumbError {
     SerenityError(SerenityError),
     IOError(std::io::Error),
-    JsonError(serde_json::error::Error),
+    SerdeError(serde_json::error::Error),
+    ReqwestError(reqwest::Error),
+    CsvError(csv::Error),
 }
 
 impl From<SerenityError> for DumbError {
@@ -33,19 +35,40 @@ impl From<std::io::Error> for DumbError {
 
 impl From<serde_json::error::Error> for DumbError {
     fn from(error: serde_json::error::Error) -> Self {
-        DumbError::JsonError(error)
+        DumbError::SerdeError(error)
+    }
+}
+
+impl From<reqwest::Error> for DumbError {
+    fn from(error: reqwest::Error) -> Self {
+        DumbError::ReqwestError(error)
+    }
+}
+
+impl From<csv::Error> for DumbError {
+    fn from(error: csv::Error) -> Self {
+        DumbError::CsvError(error)
     }
 }
 
 type MaybeError = Result<(), DumbError>;
 
+fn serde_value_to_vec<T, F>(value: &Value, transform: F) -> Option<Vec<T>>
+where
+    F: FnMut(&Value) -> Option<T>,
+{
+    value
+        .as_array()
+        .and_then(|vec| Some(vec.iter().filter_map(transform).collect::<Vec<T>>()))
+}
+
 struct GuildData {
     id: GuildId,
     count: u64,
-    last_saved: Instant,
+    whois_url: Option<String>,
+    whois_headers: Vec<String>,
+    whois_data: Vec<Vec<String>>,
 }
-
-const AUTO_SAVE_SPEED: Duration = Duration::from_secs(5);
 
 impl GuildData {
     fn from_file(id: GuildId) -> Self {
@@ -59,27 +82,70 @@ impl GuildData {
                     .get("count")
                     .and_then(|value| value.as_u64())
                     .unwrap_or(0),
-                last_saved: Instant::now(),
+                whois_url: json
+                    .get("whois_url")
+                    .and_then(|value| value.as_str())
+                    .map(|str| String::from(str)),
+                whois_headers: json
+                    .get("whois_headers")
+                    .and_then(|value| serde_value_to_vec(value, |val| val.as_str().map(|str| String::from(str))))
+                    .unwrap_or_else(|| Vec::new()),
+                whois_data: json
+                    .get("whois_data")
+                    .and_then(|value| {
+                        serde_value_to_vec(value, |val| {
+                            serde_value_to_vec(val, |v| v.as_str().map(|str| String::from(str)))
+                        })
+                    })
+                    .unwrap_or_else(|| Vec::new()),
             }
         } else {
             Self {
                 id,
                 count: 0,
-                last_saved: Instant::now(),
+                whois_url: None,
+                whois_headers: Vec::new(),
+                whois_data: Vec::new(),
             }
         }
     }
 
-    fn auto_save(&mut self) -> MaybeError {
-        let now = Instant::now();
-        if now - self.last_saved > AUTO_SAVE_SPEED {
-            serde_json::to_writer(
-                &File::create(format!("data/guilds/{}.json", self.id))?,
-                &json!({
-                    "count": self.count
-                }),
-            )?;
+    fn save(&mut self) -> MaybeError {
+        let mut object = Map::new();
+        if let Some(number) = Number::from_f64(self.count as f64) {
+            object.insert(String::from("count"), Value::Number(number));
         }
+        object.insert(
+            String::from("whois_url"),
+            self.whois_url
+                .as_ref()
+                .map_or_else(|| Value::Null, |str| Value::String(str.clone())),
+        );
+        object.insert(
+            String::from("whois_headers"),
+            Value::Array(
+                self.whois_headers
+                    .iter()
+                    .map(|str| Value::String(str.clone()))
+                    .collect(),
+            ),
+        );
+        object.insert(
+            String::from("whois_data"),
+            Value::Array(
+                self.whois_data
+                    .iter()
+                    .map(|vec| {
+                        Value::Array(vec.iter().map(|str| Value::String(str.clone())).collect())
+                    })
+                    .collect(),
+            ),
+        );
+        let json = Value::Object(object);
+        serde_json::to_writer(
+            &File::create(format!("data/guilds/{}.json", self.id))?,
+            &json,
+        )?;
         Ok(())
     }
 }
@@ -90,25 +156,33 @@ impl TypeMapKey for GuildDataKey {
     type Value = HashMap<GuildId, GuildData>;
 }
 
+enum GuildCommand {
+    GuildCount,
+    Whois(String),
+    WhoisFetch(String),
+}
+
 enum Command {
     Ping,
     GlobalCount,
-    GuildCount,
     Ponder,
-    Whois(String),
+    GuildCommand(GuildCommand),
     Ignore,
 }
 
 impl Command {
-    fn from_msg(current_user: &CurrentUser, msg: &Message) -> Self {
+    fn parse(msg: &Message, current_user: &CurrentUser) -> Self {
         match msg.content.as_str() {
             "ok moofy" => Self::GlobalCount,
-            "kk moofy" => Self::GuildCount,
+            "kk moofy" => Self::GuildCommand(GuildCommand::GuildCount),
             "moofy ponder" => Self::Ponder,
             _ => {
                 if msg.content.starts_with(":whois") {
-                    let (_, user) = msg.content.split_at(":whois".len() + 1);
-                    Self::Whois(String::from(user))
+                    let (_, user) = msg.content.split_at(":whois".len());
+                    Self::GuildCommand(GuildCommand::Whois(String::from(user)))
+                } else if msg.content.starts_with("moofy go fetch") {
+                    let (_, url) = msg.content.split_at("moofy go fetch".len());
+                    Self::GuildCommand(GuildCommand::WhoisFetch(String::from(url)))
                 } else if msg.mentions_user_id(current_user) {
                     Self::Ping
                 } else {
@@ -126,11 +200,13 @@ struct Handler {
 impl Handler {
     fn message(&self, ctx: Context, msg: Message) -> MaybeError {
         let current_user = ctx.http.get_current_user()?;
-        match Command::from_msg(&current_user, &msg) {
+
+        match Command::parse(&msg, &current_user) {
             Command::Ping => {
                 msg.channel_id
                     .say(&ctx.http, "<:ping:719277539113041930>")?;
             }
+
             Command::GlobalCount => {
                 // https://doc.rust-lang.org/book/ch16-03-shared-state.html#sharing-a-mutext-between-multiple-threads
                 let count = {
@@ -140,37 +216,94 @@ impl Handler {
                 };
                 msg.channel_id.say(&ctx.http, count)?;
             }
-            Command::GuildCount => {
-                // https://docs.rs/serenity/0.8.7/serenity/client/struct.Client.html#structfield.data
-                match msg.guild_id {
-                    Some(guild_id) => {
-                        let count = {
-                            let mut data = ctx.data.write();
-                            let map = data.get_mut::<GuildDataKey>().unwrap();
-                            let guild_data = map
-                                .entry(guild_id)
-                                .or_insert_with(|| GuildData::from_file(guild_id));
-                            guild_data.count += 1;
-                            guild_data.auto_save()?;
-                            guild_data.count
-                        };
-                        msg.channel_id.say(&ctx.http, format!("{}ish", count))?;
-                    }
-                    None => {
-                        msg.channel_id.say(&ctx.http, "server only hehehe")?;
-                    }
-                }
-            }
+
             Command::Ponder => {
                 msg.channel_id.say(&ctx.http, "let me think")?;
                 std::thread::sleep(std::time::Duration::from_millis(5000));
                 msg.channel_id.say(&ctx.http, "done")?;
             }
-            Command::Whois(user) => {
-                msg.channel_id
-                    .say(&ctx.http, format!("idk who {} is lmao", user))?;
-            }
+
             Command::Ignore => (),
+
+            // Requires guild
+            // https://docs.rs/serenity/0.8.7/serenity/client/struct.Client.html#structfield.data
+            Command::GuildCommand(command) => match msg.guild_id {
+                Some(guild_id) => {
+                    let mut data = ctx.data.write();
+                    let map = data.get_mut::<GuildDataKey>().unwrap();
+                    let guild_data = map
+                        .entry(guild_id)
+                        .or_insert_with(|| GuildData::from_file(guild_id));
+
+                    match command {
+                        GuildCommand::GuildCount => {
+                            guild_data.count += 1;
+                            msg.channel_id
+                                .say(&ctx.http, format!("{}ish", guild_data.count))?;
+                            guild_data.save()?;
+                        }
+
+                        GuildCommand::Whois(user) => {
+                            msg.channel_id
+                                .say(&ctx.http, format!("idk who {} is lmao", user))?;
+                        }
+
+                        GuildCommand::WhoisFetch(url) => {
+                            if guild_id
+                                .member(&ctx.http, msg.author)?
+                                .permissions(&ctx.cache)?
+                                .manage_guild()
+                            {
+                                match Url::parse(&url).ok().or(guild_data
+                                    .whois_url
+                                    .as_ref()
+                                    .and_then(|url| Url::parse(url).ok()))
+                                {
+                                    Some(url) => match get(url.as_str()) {
+                                        Ok(response) => {
+                                            let mut rdr = csv::Reader::from_reader(response);
+                                            guild_data.whois_url = Some(String::from(url.as_str()));
+                                            guild_data.whois_headers = rdr
+                                                .headers()?
+                                                .iter()
+                                                .map(|str| String::from(str))
+                                                .collect();
+                                            guild_data.whois_data = rdr
+                                                .records()
+                                                .filter_map(|result| result.ok())
+                                                .map(|record| {
+                                                    record
+                                                        .iter()
+                                                        .map(|str| String::from(str))
+                                                        .collect()
+                                                })
+                                                .collect();
+                                            guild_data.save()?;
+                                            msg.channel_id.say(&ctx.http, "k")?;
+                                        }
+                                        Err(error) => {
+                                            msg.channel_id.say(&ctx.http, "i tripped and fel")?;
+                                            Err(error)?;
+                                        }
+                                    },
+                                    None => {
+                                        msg.channel_id.say(
+                                            &ctx.http,
+                                            "uhhh where lol can u give me a url thx",
+                                        )?;
+                                    }
+                                }
+                            } else {
+                                msg.channel_id
+                                    .say(&ctx.http, "u cant even manage the server and you want ME to fetch it for u? lmao")?;
+                            }
+                        }
+                    }
+                }
+                None => {
+                    msg.channel_id.say(&ctx.http, "server only hehehe")?;
+                }
+            },
         }
         return Ok(());
     }
