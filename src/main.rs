@@ -1,4 +1,5 @@
 use dotenv::dotenv;
+use regex::Regex;
 use reqwest::{blocking::get, Url};
 use serde_json::{from_reader, map::Map, Number, Value};
 use serenity::{
@@ -11,6 +12,8 @@ use std::{
     fs::{create_dir_all, File},
     sync::Mutex,
 };
+#[macro_use]
+extern crate lazy_static;
 
 #[derive(Debug)]
 enum DumbError {
@@ -270,29 +273,14 @@ impl Handler {
                         }
 
                         GuildCommand::Whois(user) => {
-                            match guild_data
-                                .get_whois_entry_by_id(&user)
-                                .map(|entry| (user.clone(), entry))
+                            lazy_static! {
+                                static ref DIGITS: Regex = Regex::new(r"\d+").unwrap();
+                            }
+                            match DIGITS.find(user.as_str())
+                                .and_then(|m| guild_data.get_whois_entry_by_id(&String::from(m.as_str())).map(|entry| (String::from(m.as_str()), entry)))
                                 .or_else(|| {
-                                    let search = user.to_lowercase();
-                                    guild_id.members(&ctx, Some(1000), None).ok().and_then(|members| {
-                                        println!("found {:?}", members);
-                                        members.iter().find_map(|member| {
-                                            let user_id = member.user_id().to_string();
-                                            if member
-                                                .nick
-                                                .as_ref()
-                                                .filter(|nick| nick.to_lowercase() == search)
-                                                .is_some()
-                                            {
-                                                guild_data
-                                                    .get_whois_entry_by_id(&user_id)
-                                                    .map(|entry| (user_id, entry))
-                                            } else {
-                                                None
-                                            }
-                                        })
-                                    })
+                                    msg.channel_id.say(&ctx.http, "a literacy test is now required to get a user by their nickname/username. please read https://docs.rs/serenity/0.8.7/serenity/index.html and answer the following question: 1. how does one ensure that Serenity caches the members of a guild in order to prevent needlessly fetching from the API?").and_then(|_| Ok(()));
+                                    None
                                 }) {
                                 Some((id, entry)) => {
                                     msg.channel_id.send_message(&ctx.http, |message| {
