@@ -11,7 +11,7 @@ use client_data::{
     ClientData,
 };
 use dotenv::dotenv;
-pub use dumb_error::MaybeError;
+pub use dumb_error::{DumbError, MaybeError};
 use regex::Regex;
 use reqwest::{blocking::get, Url};
 use serenity::{
@@ -20,10 +20,32 @@ use serenity::{
 };
 use std::{collections::HashMap, env, fs::create_dir_all, sync::Mutex};
 
+/// Sends a message with a very minimal embed, mostly to display untrusted user input (*cough*
+/// chop0).
+fn send_with_embed(
+    ctx: &Context,
+    msg: &Message,
+    content: &str,
+    embed_content: &String,
+) -> MaybeError {
+    msg.channel_id.send_message(&ctx.http, |message| {
+        message.embed(|embed| {
+            embed.description(embed_content);
+            embed
+        });
+        message.content(content);
+        message
+    })?;
+    Ok(())
+}
+
 enum GuildCommand {
     GuildCount,
     Whois(String),
     WhoisFetch(String),
+    GetWebtoon(String),
+    AddWebtoon(String, String),
+    RemoveWebtoon(String),
 }
 
 enum Command {
@@ -231,6 +253,45 @@ impl Handler {
                                 msg.channel_id
                                     .say(&ctx.http, "u cant even manage the server and you want ME to fetch it for u? lmao")?;
                             }
+                        }
+
+                        GuildCommand::GetWebtoon(webtoon_id) => {
+                            // problem: Result<(), DumbError>
+                            // There's no actual problem if there's a ().
+                            if let Err(problem) = guild_data.webtoons.get(&webtoon_id).ok_or_else(|| {
+                                msg.channel_id
+                                    .say(&ctx.http, "omg is that another webtoon can i have the url plssss (`moofy check this out <url>`)")
+                                    .map(|_| ())
+                                    .map_err(|err| err.into())
+                            }).and_then(|url_str| {
+                                Url::parse(&url_str).map_err(|_| {
+                                    send_with_embed(
+                                        &ctx,
+                                        &msg,
+                                        "uhhh i dont think u gave me a url lol",
+                                        url_str,
+                                    )
+                                })
+                            }).and_then(|url| get(url.as_str()).map_err(|error| {
+                                msg.channel_id
+                                    .say(&ctx.http, "hmm the url doesnt seem to work")
+                                    .or(Err(error))
+                                    .map(|_| ())
+                                    .map_err(|err| err.into())
+                            })).and_then::<(), _>(|response| {
+                                //
+                                Err(Ok(()))
+                            }) {
+                                problem?;
+                            }
+                        }
+
+                        GuildCommand::AddWebtoon(_, _) => {
+                            unimplemented!();
+                        }
+
+                        GuildCommand::RemoveWebtoon(_) => {
+                            unimplemented!();
                         }
                     }
                 }

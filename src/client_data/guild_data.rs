@@ -1,5 +1,8 @@
 use super::ClientData;
-use crate::{serde_conversions::serde_value_to_vec, MaybeError};
+use crate::{
+    serde_conversions::{hashmap_to_serde_object, serde_map_to_hashmap, serde_value_to_vec},
+    MaybeError,
+};
 use serde_json::{from_reader, map::Map, Number, Value};
 use serenity::{model::id::GuildId, prelude::*};
 use std::{collections::HashMap, fs::File};
@@ -10,6 +13,7 @@ pub struct GuildData {
     pub whois_url: Option<String>,
     pub whois_headers: Vec<String>,
     pub whois_data: Vec<Vec<String>>,
+    pub webtoons: HashMap<String, String>,
 }
 
 impl GuildData {
@@ -60,6 +64,15 @@ impl ClientData for GuildData {
                         })
                     })
                     .unwrap_or_else(|| Vec::new()),
+                webtoons: json
+                    .get("webtoons")
+                    .and_then(|value| value.as_object())
+                    .map(|map| {
+                        serde_map_to_hashmap(map, |value| {
+                            value.as_str().map(|str| String::from(str))
+                        })
+                    })
+                    .unwrap_or_else(|| HashMap::new()),
             }
         } else {
             Self {
@@ -68,6 +81,7 @@ impl ClientData for GuildData {
                 whois_url: None,
                 whois_headers: Vec::new(),
                 whois_data: Vec::new(),
+                webtoons: HashMap::new(),
             }
         }
     }
@@ -102,6 +116,10 @@ impl ClientData for GuildData {
                     })
                     .collect(),
             ),
+        );
+        object.insert(
+            String::from("webtoons"),
+            hashmap_to_serde_object(&self.webtoons, |str| Some(Value::String(str.clone()))),
         );
         let json = Value::Object(object);
         serde_json::to_writer(
