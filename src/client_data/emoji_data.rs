@@ -12,6 +12,13 @@ pub struct EmojiData {
     pub emoji: HashMap<String, u64>,
 }
 
+impl EmojiData {
+    pub fn track_emoji(&mut self, id: String) {
+        let count = self.emoji.entry(id).or_insert(0);
+        *count += 1;
+    }
+}
+
 impl ClientData for EmojiData {
     type Id = GuildId;
 

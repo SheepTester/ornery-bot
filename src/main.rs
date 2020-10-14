@@ -15,7 +15,12 @@ pub use dumb_error::{DumbError, MaybeError};
 use regex::Regex;
 use reqwest::{blocking::get, Url};
 use serenity::{
-    model::{channel::Message, gateway::Ready, id::GuildId, prelude::CurrentUser},
+    model::{
+        channel::{Message, Reaction, ReactionType},
+        gateway::Ready,
+        id::GuildId,
+        prelude::CurrentUser,
+    },
     prelude::*,
 };
 use std::{
@@ -117,6 +122,22 @@ struct Handler {
 }
 
 impl Handler {
+    fn reaction_add(&self, ctx: Context, reaction: Reaction) -> MaybeError {
+        if let Some(guild_id) = reaction.guild_id {
+            if let ReactionType::Custom { id, .. } = reaction.emoji {
+                let mut data = ctx.data.write();
+                let emoji_data = data
+                    .get_mut::<EmojiDataKey>()
+                    .unwrap()
+                    .entry(guild_id)
+                    .or_insert_with(|| EmojiData::from_file(guild_id));
+                emoji_data.track_emoji(id.to_string());
+                emoji_data.save()?;
+            }
+        }
+        Ok(())
+    }
+
     fn guild_command(
         &self,
         ctx: &Context,
@@ -178,7 +199,8 @@ impl Handler {
                         )?;
                     }
                     WhoisResolution::NoUser => {
-                        msg.channel_id.say(&ctx.http, "a literacy test is now required to get a user by their nickname/username. please read https://docs.rs/serenity/0.8.7/serenity/index.html and answer the following question: 1. how does one ensure that Serenity caches the members of a guild in order to prevent needlessly fetching from the API?")?;
+                        msg.channel_id
+                            .say(&ctx.http, "sry i need the id im working on it tho")?;
                         // msg.channel_id
                         //     .say(&ctx.http, "idk who ur talkin bout lmao")?;
                     }
@@ -237,8 +259,12 @@ impl Handler {
                 let url = match Url::parse(&url_str) {
                     Ok(url) => url,
                     Err(_) => {
-                        msg.channel_id
-                            .say(&ctx.http, "omg is that another webtoon can i have the url plssss (`moofy check this out <url>`)")?;
+                        send_with_embed(
+                            &ctx,
+                            &msg,
+                            "uhhh i dont think u gave me a url lol",
+                            url_str,
+                        )?;
                         return Ok(());
                     }
                 };
@@ -298,6 +324,7 @@ impl Handler {
                     }
                     Entry::Vacant(vacant_entry) => {
                         vacant_entry.insert(url_str);
+                        guild_data.save()?;
                         send_with_embed(&ctx, &msg, "yes PLEASE", &success_msg)?;
                     }
                 }
@@ -310,6 +337,7 @@ impl Handler {
                     msg.channel_id
                         .say(&ctx.http, "wasnt reading it anyways lmao")?;
                 }
+                guild_data.save()?;
             }
         }
         Ok(())
@@ -334,11 +362,7 @@ impl Handler {
                 .or_insert_with(|| EmojiData::from_file(guild_id));
             for captures in EMOJI.captures_iter(msg.content.as_str()) {
                 if let Some(rmatch) = captures.get(1) {
-                    let count = emoji_data
-                        .emoji
-                        .entry(String::from(rmatch.as_str()))
-                        .or_insert(0);
-                    *count += 1;
+                    emoji_data.track_emoji(String::from(rmatch.as_str()));
                 }
             }
             emoji_data.save()?;
@@ -402,6 +426,12 @@ impl Handler {
 }
 
 impl EventHandler for Handler {
+    fn reaction_add(&self, ctx: Context, add_reaction: Reaction) {
+        if let Err(why) = self.reaction_add(ctx, add_reaction) {
+            println!("Error from reaction_add handler: {:?}", why);
+        }
+    }
+
     fn message(&self, ctx: Context, msg: Message) {
         if let Err(why) = self.message(ctx, msg) {
             println!("Error from message handler: {:?}", why);
