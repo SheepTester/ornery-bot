@@ -44,6 +44,12 @@ fn send_with_embed(
     Ok(())
 }
 
+enum WhoisResolution<'a> {
+    EntryFound(String, &'a Vec<String>),
+    UserFound(String),
+    NoUser,
+}
+
 enum GuildCommand {
     GuildCount,
     Whois(String),
@@ -131,13 +137,18 @@ impl Handler {
                 lazy_static! {
                     static ref DIGITS: Regex = Regex::new(r"\d+").unwrap();
                 }
-                match DIGITS.find(user.as_str())
-                    .and_then(|m| guild_data.get_whois_entry_by_id(&String::from(m.as_str())).map(|entry| (String::from(m.as_str()), entry)))
-                    .or_else(|| {
-                        msg.channel_id.say(&ctx.http, "a literacy test is now required to get a user by their nickname/username. please read https://docs.rs/serenity/0.8.7/serenity/index.html and answer the following question: 1. how does one ensure that Serenity caches the members of a guild in order to prevent needlessly fetching from the API?").ok();
-                        None
-                    }) {
-                    Some((id, entry)) => {
+                let whois_resolution = match DIGITS.find(user.as_str()) {
+                    Some(rmatch) => {
+                        let id = String::from(rmatch.as_str());
+                        match guild_data.get_whois_entry_by_id(&id) {
+                            Some(entry) => WhoisResolution::EntryFound(id, entry),
+                            None => WhoisResolution::UserFound(id),
+                        }
+                    }
+                    None => WhoisResolution::NoUser,
+                };
+                match whois_resolution {
+                    WhoisResolution::EntryFound(id, entry) => {
                         msg.channel_id.send_message(&ctx.http, |message| {
                             message.embed(|embed| {
                                 embed.title("Watchlist | fbi.gov");
@@ -158,129 +169,120 @@ impl Handler {
                             message
                         })?;
                     }
-                    _ => {
-                        msg.channel_id.say(&ctx.http, "idk who that is lmao")?;
+                    WhoisResolution::UserFound(id) => {
+                        send_with_embed(
+                            &ctx,
+                            &msg,
+                            "idk who they are lmao",
+                            &format!("<@{}>", id),
+                        )?;
+                    }
+                    WhoisResolution::NoUser => {
+                        msg.channel_id.say(&ctx.http, "a literacy test is now required to get a user by their nickname/username. please read https://docs.rs/serenity/0.8.7/serenity/index.html and answer the following question: 1. how does one ensure that Serenity caches the members of a guild in order to prevent needlessly fetching from the API?")?;
+                        // msg.channel_id
+                        //     .say(&ctx.http, "idk who ur talkin bout lmao")?;
                     }
                 }
-                println!("end {}", user);
             }
 
             GuildCommand::WhoisFetch(url) => {
-                if guild_id
+                if !guild_id
                     .member(&ctx.http, msg.author.id)?
                     .permissions(&ctx.cache)?
                     .manage_guild()
                 {
-                    match Url::parse(&url).ok().or(guild_data
-                        .whois_url
-                        .as_ref()
-                        .and_then(|url| Url::parse(url).ok()))
-                    {
-                        Some(url) => match get(url.as_str()) {
-                            Ok(response) => {
-                                let mut rdr = csv::Reader::from_reader(response);
-                                guild_data.whois_url = Some(String::from(url.as_str()));
-                                guild_data.whois_headers =
-                                    rdr.headers()?.iter().map(|str| String::from(str)).collect();
-                                guild_data.whois_data = rdr
-                                    .records()
-                                    .filter_map(|result| result.ok())
-                                    .map(|record| {
-                                        record.iter().map(|str| String::from(str)).collect()
-                                    })
-                                    .collect();
-                                guild_data.save()?;
-                                msg.channel_id.say(&ctx.http, "k")?;
-                            }
-                            Err(error) => {
-                                msg.channel_id.say(&ctx.http, "i tripped and fel")?;
-                                Err(error)?;
-                            }
-                        },
-                        None => {
-                            msg.channel_id
-                                .say(&ctx.http, "uhhh where lol can u give me a url thx")?;
-                        }
-                    }
-                } else {
                     msg.channel_id.say(
                         &ctx.http,
                         "u cant even manage the server and you want ME to fetch it for u? lmao",
                     )?;
+                    return Ok(());
                 }
+                let url = match Url::parse(&url).ok().or(guild_data
+                    .whois_url
+                    .as_ref()
+                    .and_then(|url| Url::parse(url).ok()))
+                {
+                    Some(url) => url,
+                    None => {
+                        msg.channel_id
+                            .say(&ctx.http, "uhhh where lol can u give me a url thx")?;
+                        return Ok(());
+                    }
+                };
+                let response = match get(url.as_str()) {
+                    Ok(response) => response,
+                    Err(error) => {
+                        msg.channel_id.say(&ctx.http, "i tripped and fel")?;
+                        return Err(error.into());
+                    }
+                };
+                let mut rdr = csv::Reader::from_reader(response);
+                guild_data.whois_url = Some(String::from(url.as_str()));
+                guild_data.whois_headers =
+                    rdr.headers()?.iter().map(|str| String::from(str)).collect();
+                guild_data.whois_data = rdr
+                    .records()
+                    .filter_map(|result| result.ok())
+                    .map(|record| record.iter().map(|str| String::from(str)).collect())
+                    .collect();
+                guild_data.save()?;
+                msg.channel_id.say(&ctx.http, "k")?;
             }
 
             GuildCommand::GetWebtoon(webtoon_id) => {
-                // problem: Result<(), DumbError>
-                // There's no actual problem if there's a ().
-                if let Err(problem) = guild_data.webtoons
-                    .get(&webtoon_id)
-                    .ok_or_else(|| {
+                let url_str = match guild_data.webtoons.get(&webtoon_id) {
+                    Some(url_str) => url_str,
+                    None => return Ok(()),
+                };
+                let url = match Url::parse(&url_str) {
+                    Ok(url) => url,
+                    Err(_) => {
                         msg.channel_id
-                            .say(&ctx.http, "omg is that another webtoon can i have the url plssss (`moofy check this out <url>`)")
-                            .map(|_| ())
-                            .map_err(|err| err.into())
-                    })
-                    .and_then(|url_str| {
-                        Url::parse(&url_str).map_err(|_| {
-                            send_with_embed(
-                                &ctx,
-                                &msg,
-                                "uhhh i dont think u gave me a url lol",
-                                url_str,
-                            )
-                        })
-                    })
-                    .and_then(|url| get(url.as_str()).map_err(|error| {
+                            .say(&ctx.http, "omg is that another webtoon can i have the url plssss (`moofy check this out <url>`)")?;
+                        return Ok(());
+                    }
+                };
+                let response = match get(url.as_str()) {
+                    Ok(response) => response,
+                    Err(error) => {
                         msg.channel_id
-                            .say(&ctx.http, "hmm the url doesnt seem to work")
-                            .or(Err(error))
-                            .map(|_| ())
-                            .map_err(|err| err.into())
-                    }))
-                    .and_then(|response| response.text().map_err(|err| Err(err.into())))
-                    .and_then::<(), _>(|html| {
-                        lazy_static! {
-                            static ref WEBTOON_NAME: Regex =
-                                Regex::new(r#"property="og:title" content="([^"]+)""#).unwrap();
-                            static ref EP_NAME: Regex =
-                                Regex::new(r#"<span class="subj"><span>([^<]+)</span>"#).unwrap();
-                            static ref IS_UP: Regex =
-                                Regex::new(r#"<em class="tx_up">UP</em>"#).unwrap();
-                        }
-                        let webtoon_name = WEBTOON_NAME
-                            .captures(html.as_ref())
-                            .and_then(|captures| captures.get(1))
-                            .map(|rmatch| rmatch.as_str())
-                            .unwrap_or("[couldn't get Webtoon name]");
-                        let ep_name = EP_NAME
-                            .captures(html.as_ref())
-                            .and_then(|captures| captures.get(1))
-                            .map(|rmatch| rmatch.as_str())
-                            .unwrap_or("[couldn't get episode name]");
-                        let is_up = IS_UP.is_match(html.as_ref());
-                        Err(msg
-                            .channel_id
-                            .send_message(&ctx.http, |message| {
-                                message.embed(|embed| {
-                                    embed.title(webtoon_name);
-                                    embed.description(format!(
-                                        "[{}]({}){}",
-                                        ep_name,
-                                        "url here",
-                                        if is_up { " **UP**" } else { "" },
-                                    ));
-                                    embed
-                                });
-                                message.content("found this on google idk hope it helps");
-                                message
-                            })
-                            .map(|_| ())
-                            .map_err(|err| err.into()))
-                    })
-                {
-                    problem?;
+                            .say(&ctx.http, "hmm the url doesnt seem to work")?;
+                        return Err(error.into());
+                    }
+                };
+                let html = response.text()?;
+                lazy_static! {
+                    static ref WEBTOON_NAME: Regex =
+                        Regex::new(r#"property="og:title" content="([^"]+)""#).unwrap();
+                    static ref EP_NAME: Regex =
+                        Regex::new(r#"<span class="subj"><span>([^<]+)</span>"#).unwrap();
+                    static ref IS_UP: Regex = Regex::new(r#"<em class="tx_up">UP</em>"#).unwrap();
                 }
+                let webtoon_name = WEBTOON_NAME
+                    .captures(html.as_ref())
+                    .and_then(|captures| captures.get(1))
+                    .map(|rmatch| rmatch.as_str())
+                    .unwrap_or("[couldn't get Webtoon name]");
+                let ep_name = EP_NAME
+                    .captures(html.as_ref())
+                    .and_then(|captures| captures.get(1))
+                    .map(|rmatch| rmatch.as_str())
+                    .unwrap_or("[couldn't get episode name]");
+                let is_up = IS_UP.is_match(html.as_ref());
+                msg.channel_id.send_message(&ctx.http, |message| {
+                    message.embed(|embed| {
+                        embed.title(webtoon_name);
+                        embed.description(format!(
+                            "[{}]({}){}",
+                            ep_name,
+                            "url here",
+                            if is_up { " **UP**" } else { "" },
+                        ));
+                        embed
+                    });
+                    message.content("found this on google idk hope it helps");
+                    message
+                })?;
             }
 
             GuildCommand::AddWebtoon(webtoon_id, url_str) => {
