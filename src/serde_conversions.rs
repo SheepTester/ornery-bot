@@ -27,15 +27,13 @@ where
 
 pub fn hashmap_to_serde_object<V, F>(hash_map: &HashMap<String, V>, transform: F) -> Value
 where
-    F: Fn(&V) -> Option<Value>,
+    F: Fn(&V) -> Value,
 {
     let hash_map_iter = hash_map.iter();
     let (min_size, _) = hash_map_iter.size_hint();
     let mut map = Map::with_capacity(min_size);
     for (key, value) in hash_map_iter {
-        if let Some(val) = transform(value) {
-            map.insert(key.to_owned(), val);
-        }
+        map.insert(key.to_owned(), transform(value));
     }
     Value::Object(map)
 }

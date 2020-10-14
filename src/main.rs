@@ -151,6 +151,7 @@ impl Handler {
                 guild_data.count += 1;
                 msg.channel_id
                     .say(&ctx.http, format!("{}ish", guild_data.count))?;
+                guild_data.update_count();
                 guild_data.save()?;
             }
 
@@ -247,6 +248,7 @@ impl Handler {
                     .filter_map(|result| result.ok())
                     .map(|record| record.iter().map(|str| String::from(str)).collect())
                     .collect();
+                guild_data.update_whois();
                 guild_data.save()?;
                 msg.channel_id.say(&ctx.http, "k")?;
             }
@@ -306,7 +308,7 @@ impl Handler {
                         ));
                         embed
                     });
-                    message.content("found this on google idk hope it helps");
+                    message.content("i already read this lmao ur slow");
                     message
                 })?;
             }
@@ -324,6 +326,7 @@ impl Handler {
                     }
                     Entry::Vacant(vacant_entry) => {
                         vacant_entry.insert(url_str);
+                        guild_data.update_webtoons();
                         guild_data.save()?;
                         send_with_embed(&ctx, &msg, "yes PLEASE", &success_msg)?;
                     }
@@ -337,6 +340,7 @@ impl Handler {
                     msg.channel_id
                         .say(&ctx.http, "wasnt reading it anyways lmao")?;
                 }
+                guild_data.update_webtoons();
                 guild_data.save()?;
             }
         }

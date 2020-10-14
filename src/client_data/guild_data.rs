@@ -3,7 +3,7 @@ use crate::{
     serde_conversions::{hashmap_to_serde_object, serde_map_to_hashmap, serde_value_to_vec},
     MaybeError,
 };
-use serde_json::{from_reader, map::Map, Number, Value};
+use serde_json::{from_reader, map::Map, Value};
 use serenity::{model::id::GuildId, prelude::*};
 use std::{collections::HashMap, fs::File};
 
@@ -14,6 +14,7 @@ pub struct GuildData {
     pub whois_headers: Vec<String>,
     pub whois_data: Vec<Vec<String>>,
     pub webtoons: HashMap<String, String>,
+    json: Value,
 }
 
 impl GuildData {
@@ -29,6 +30,60 @@ impl GuildData {
                         None => false,
                     })
             })
+    }
+
+    pub fn update_count(&mut self) {
+        if let Value::Object(map) = &mut self.json {
+            map.insert(String::from("count"), Value::from(self.count));
+        } else {
+            self.ensure_init_json();
+        }
+    }
+
+    pub fn update_whois(&mut self) {
+        if let Value::Object(map) = &mut self.json {
+            map.insert(
+                String::from("whois_url"),
+                self.whois_url
+                    .as_ref()
+                    .map_or_else(|| Value::Null, |str| Value::from(str.clone())),
+            );
+            map.insert(
+                String::from("whois_headers"),
+                Value::from(self.whois_headers.clone()),
+            );
+            map.insert(
+                String::from("whois_data"),
+                Value::from(self.whois_data.clone()),
+            );
+        } else {
+            self.ensure_init_json();
+        }
+    }
+
+    pub fn update_webtoons(&mut self) {
+        if let Value::Object(map) = &mut self.json {
+            map.insert(
+                String::from("webtoons"),
+                hashmap_to_serde_object(&self.webtoons, |str| Value::from(str.clone())),
+            );
+        } else {
+            self.ensure_init_json();
+        }
+    }
+
+    /// Returns whether the JSON has just been initialized
+    fn ensure_init_json(&mut self) -> bool {
+        match self.json {
+            Value::Object(_) => false,
+            _ => {
+                self.json = Value::Object(Map::new());
+                self.update_count();
+                self.update_whois();
+                self.update_webtoons();
+                true
+            }
+        }
     }
 }
 
@@ -73,6 +128,7 @@ impl ClientData for GuildData {
                         })
                     })
                     .unwrap_or_else(|| HashMap::new()),
+                json: Value::Null,
             }
         } else {
             Self {
@@ -82,49 +138,16 @@ impl ClientData for GuildData {
                 whois_headers: Vec::new(),
                 whois_data: Vec::new(),
                 webtoons: HashMap::new(),
+                json: Value::Null,
             }
         }
     }
 
     fn save(&mut self) -> MaybeError {
-        let mut object = Map::new();
-        if let Some(number) = Number::from_f64(self.count as f64) {
-            object.insert(String::from("count"), Value::Number(number));
-        }
-        object.insert(
-            String::from("whois_url"),
-            self.whois_url
-                .as_ref()
-                .map_or_else(|| Value::Null, |str| Value::String(str.clone())),
-        );
-        object.insert(
-            String::from("whois_headers"),
-            Value::Array(
-                self.whois_headers
-                    .iter()
-                    .map(|str| Value::String(str.clone()))
-                    .collect(),
-            ),
-        );
-        object.insert(
-            String::from("whois_data"),
-            Value::Array(
-                self.whois_data
-                    .iter()
-                    .map(|vec| {
-                        Value::Array(vec.iter().map(|str| Value::String(str.clone())).collect())
-                    })
-                    .collect(),
-            ),
-        );
-        object.insert(
-            String::from("webtoons"),
-            hashmap_to_serde_object(&self.webtoons, |str| Some(Value::String(str.clone()))),
-        );
-        let json = Value::Object(object);
+        self.ensure_init_json();
         serde_json::to_writer(
             &File::create(format!("data/guilds/{}.json", self.id))?,
-            &json,
+            &self.json,
         )?;
         Ok(())
     }

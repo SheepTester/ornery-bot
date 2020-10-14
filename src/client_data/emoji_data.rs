@@ -3,7 +3,7 @@ use crate::{
     serde_conversions::{hashmap_to_serde_object, serde_map_to_hashmap},
     MaybeError,
 };
-use serde_json::{from_reader, Number, Value};
+use serde_json::{from_reader, Value};
 use serenity::{model::id::GuildId, prelude::*};
 use std::{collections::HashMap, fs::File};
 
@@ -43,9 +43,7 @@ impl ClientData for EmojiData {
     }
 
     fn save(&mut self) -> MaybeError {
-        let json = hashmap_to_serde_object(&self.emoji, |num| {
-            Number::from_f64(*num as f64).map(|float| Value::Number(float))
-        });
+        let json = hashmap_to_serde_object(&self.emoji, |num| Value::from(*num));
         serde_json::to_writer(
             &File::create(format!("data/emoji/{}.json", self.id))?,
             &json,
