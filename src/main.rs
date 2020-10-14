@@ -1,4 +1,7 @@
+pub mod dumb_error;
+
 use dotenv::dotenv;
+use dumb_error::MaybeError;
 use regex::Regex;
 use reqwest::{blocking::get, Url};
 use serde_json::{from_reader, map::Map, Number, Value};
@@ -7,54 +10,16 @@ use serenity::{
     prelude::*,
 };
 use std::{
+    cmp::Eq,
     collections::HashMap,
     env,
     fs::{create_dir_all, File},
+    hash::Hash,
+    marker::{Send, Sync},
     sync::Mutex,
 };
 #[macro_use]
 extern crate lazy_static;
-
-#[derive(Debug)]
-enum DumbError {
-    SerenityError(SerenityError),
-    IOError(std::io::Error),
-    SerdeError(serde_json::error::Error),
-    ReqwestError(reqwest::Error),
-    CsvError(csv::Error),
-}
-
-impl From<SerenityError> for DumbError {
-    fn from(error: SerenityError) -> Self {
-        DumbError::SerenityError(error)
-    }
-}
-
-impl From<std::io::Error> for DumbError {
-    fn from(error: std::io::Error) -> Self {
-        DumbError::IOError(error)
-    }
-}
-
-impl From<serde_json::error::Error> for DumbError {
-    fn from(error: serde_json::error::Error) -> Self {
-        DumbError::SerdeError(error)
-    }
-}
-
-impl From<reqwest::Error> for DumbError {
-    fn from(error: reqwest::Error) -> Self {
-        DumbError::ReqwestError(error)
-    }
-}
-
-impl From<csv::Error> for DumbError {
-    fn from(error: csv::Error) -> Self {
-        DumbError::CsvError(error)
-    }
-}
-
-type MaybeError = Result<(), DumbError>;
 
 fn serde_value_to_vec<T, F>(value: &Value, transform: F) -> Option<Vec<T>>
 where
@@ -63,6 +28,43 @@ where
     value
         .as_array()
         .and_then(|vec| Some(vec.iter().filter_map(transform).collect::<Vec<T>>()))
+}
+
+fn serde_map_to_hashmap<V, F>(map: &Map<String, Value>, transform: F) -> HashMap<String, V>
+where
+    F: Fn(&Value) -> Option<V>,
+{
+    let map_iter = map.iter();
+    let (min_size, _) = map_iter.size_hint();
+    let mut hash_map = HashMap::with_capacity(min_size);
+    for (key, value) in map_iter {
+        if let Some(val) = transform(value) {
+            hash_map.insert(key.to_owned(), val);
+        }
+    }
+    hash_map
+}
+
+fn hashmap_to_serde_object<V, F>(hash_map: &HashMap<String, V>, transform: F) -> Value
+where
+    F: Fn(&V) -> Option<Value>,
+{
+    let hash_map_iter = hash_map.iter();
+    let (min_size, _) = hash_map_iter.size_hint();
+    let mut map = Map::with_capacity(min_size);
+    for (key, value) in hash_map_iter {
+        if let Some(val) = transform(value) {
+            map.insert(key.to_owned(), val);
+        }
+    }
+    Value::Object(map)
+}
+
+trait ClientData {
+    // As needed by serenity::prelude::ShareMap and HashMap's K
+    type Id: 'static + Sync + Send + Eq + Hash + Copy;
+    fn from_file(id: Self::Id) -> Self;
+    fn save(&mut self) -> MaybeError;
 }
 
 struct GuildData {
@@ -74,6 +76,24 @@ struct GuildData {
 }
 
 impl GuildData {
+    fn get_whois_entry_by_id(&self, id: &String) -> Option<&Vec<String>> {
+        self.whois_headers
+            .iter()
+            .position(|header| header.to_ascii_lowercase().contains("id"))
+            .and_then(|id_index| {
+                self.whois_data
+                    .iter()
+                    .find(|entry| match entry.get(id_index) {
+                        Some(entry_id) => entry_id == id,
+                        None => false,
+                    })
+            })
+    }
+}
+
+impl ClientData for GuildData {
+    type Id = GuildId;
+
     fn from_file(id: GuildId) -> Self {
         if let Some(json) = File::open(format!("data/guilds/{}.json", id))
             .ok()
@@ -153,26 +173,58 @@ impl GuildData {
         )?;
         Ok(())
     }
-
-    fn get_whois_entry_by_id(&self, id: &String) -> Option<&Vec<String>> {
-        self.whois_headers
-            .iter()
-            .position(|header| header.to_ascii_lowercase().contains("id"))
-            .and_then(|id_index| {
-                self.whois_data
-                    .iter()
-                    .find(|entry| match entry.get(id_index) {
-                        Some(entry_id) => entry_id == id,
-                        None => false,
-                    })
-            })
-    }
 }
 
 struct GuildDataKey;
 
 impl TypeMapKey for GuildDataKey {
     type Value = HashMap<GuildId, GuildData>;
+}
+
+struct EmojiData {
+    id: GuildId,
+    emoji: HashMap<String, u64>,
+}
+
+impl ClientData for EmojiData {
+    type Id = GuildId;
+
+    fn from_file(id: GuildId) -> Self {
+        if let Some(json) = File::open(format!("data/emoji/{}.json", id))
+            .ok()
+            .and_then(|file| from_reader::<File, Value>(file).ok())
+        {
+            Self {
+                id,
+                emoji: json
+                    .as_object()
+                    .map(|map| serde_map_to_hashmap(map, |value| value.as_u64()))
+                    .unwrap_or_else(|| HashMap::new()),
+            }
+        } else {
+            Self {
+                id,
+                emoji: HashMap::new(),
+            }
+        }
+    }
+
+    fn save(&mut self) -> MaybeError {
+        let json = hashmap_to_serde_object(&self.emoji, |num| {
+            Number::from_f64(*num as f64).map(|float| Value::Number(float))
+        });
+        serde_json::to_writer(
+            &File::create(format!("data/emoji/{}.json", self.id))?,
+            &json,
+        )?;
+        Ok(())
+    }
+}
+
+struct EmojiDataKey;
+
+impl TypeMapKey for EmojiDataKey {
+    type Value = HashMap<GuildId, EmojiData>;
 }
 
 enum GuildCommand {
@@ -215,13 +267,53 @@ impl Command {
     }
 }
 
+// fn get_client_data<'a, K, D>(ctx: &'a Context, id: D::Id) -> &'a mut D
+// where
+//     K: TypeMapKey<Value = HashMap<D::Id, D>>,
+//     // D is 'static because of D::Id
+//     D: ClientData + 'static + Sync + Send,
+// {
+//     ctx.data
+//         .write()
+//         .get_mut::<K>()
+//         .unwrap()
+//         .entry(id)
+//         .or_insert_with(|| D::from_file(id))
+// }
+
 struct Handler {
     count: Mutex<u32>,
 }
 
 impl Handler {
     fn message(&self, ctx: Context, msg: Message) -> MaybeError {
+        if msg.author.bot {
+            return Ok(());
+        }
+
         let current_user = ctx.http.get_current_user()?;
+
+        if let Some(guild_id) = msg.guild_id {
+            lazy_static! {
+                static ref EMOJI: Regex = Regex::new(r"<a?:\w+:(\d+)>").unwrap();
+            }
+            let mut data = ctx.data.write();
+            let emoji_data = data
+                .get_mut::<EmojiDataKey>()
+                .unwrap()
+                .entry(guild_id)
+                .or_insert_with(|| EmojiData::from_file(guild_id));
+            for captures in EMOJI.captures_iter(msg.content.as_str()) {
+                if let Some(rmatch) = captures.get(1) {
+                    let count = emoji_data
+                        .emoji
+                        .entry(String::from(rmatch.as_str()))
+                        .or_insert(0);
+                    *count += 1;
+                }
+            }
+            emoji_data.save()?;
+        }
 
         match Command::parse(&msg, &current_user) {
             Command::Ping => {
@@ -259,8 +351,9 @@ impl Handler {
             Command::GuildCommand(command) => match msg.guild_id {
                 Some(guild_id) => {
                     let mut data = ctx.data.write();
-                    let map = data.get_mut::<GuildDataKey>().unwrap();
-                    let guild_data = map
+                    let guild_data = data
+                        .get_mut::<GuildDataKey>()
+                        .unwrap()
                         .entry(guild_id)
                         .or_insert_with(|| GuildData::from_file(guild_id));
 
@@ -279,7 +372,7 @@ impl Handler {
                             match DIGITS.find(user.as_str())
                                 .and_then(|m| guild_data.get_whois_entry_by_id(&String::from(m.as_str())).map(|entry| (String::from(m.as_str()), entry)))
                                 .or_else(|| {
-                                    msg.channel_id.say(&ctx.http, "a literacy test is now required to get a user by their nickname/username. please read https://docs.rs/serenity/0.8.7/serenity/index.html and answer the following question: 1. how does one ensure that Serenity caches the members of a guild in order to prevent needlessly fetching from the API?").and_then(|_| Ok(()));
+                                    msg.channel_id.say(&ctx.http, "a literacy test is now required to get a user by their nickname/username. please read https://docs.rs/serenity/0.8.7/serenity/index.html and answer the following question: 1. how does one ensure that Serenity caches the members of a guild in order to prevent needlessly fetching from the API?").ok();
                                     None
                                 }) {
                                 Some((id, entry)) => {
@@ -398,6 +491,7 @@ fn main() {
 
     create_dir_all("data/guilds").expect("Error creating guild data folder");
     create_dir_all("data/users").expect("Error creating user data folder");
+    create_dir_all("data/emoji").expect("Error creating emoji data folder");
 
     let mut client = Client::new(
         &token,
@@ -410,6 +504,7 @@ fn main() {
     {
         let mut data = client.data.write();
         data.insert::<GuildDataKey>(HashMap::default());
+        data.insert::<EmojiDataKey>(HashMap::default());
     }
 
     // Finally, start a single shard, and start listening to events.
