@@ -1,231 +1,24 @@
+pub mod client_data;
 pub mod dumb_error;
+pub mod serde_conversions;
 
-use dotenv::dotenv;
-use dumb_error::MaybeError;
-use regex::Regex;
-use reqwest::{blocking::get, Url};
-use serde_json::{from_reader, map::Map, Number, Value};
-use serenity::{
-    model::{channel::Message, gateway::Ready, id::GuildId, prelude::CurrentUser},
-    prelude::*,
-};
-use std::{
-    cmp::Eq,
-    collections::HashMap,
-    env,
-    fs::{create_dir_all, File},
-    hash::Hash,
-    marker::{Send, Sync},
-    sync::Mutex,
-};
 #[macro_use]
 extern crate lazy_static;
 
-fn serde_value_to_vec<T, F>(value: &Value, transform: F) -> Option<Vec<T>>
-where
-    F: FnMut(&Value) -> Option<T>,
-{
-    value
-        .as_array()
-        .and_then(|vec| Some(vec.iter().filter_map(transform).collect::<Vec<T>>()))
-}
-
-fn serde_map_to_hashmap<V, F>(map: &Map<String, Value>, transform: F) -> HashMap<String, V>
-where
-    F: Fn(&Value) -> Option<V>,
-{
-    let map_iter = map.iter();
-    let (min_size, _) = map_iter.size_hint();
-    let mut hash_map = HashMap::with_capacity(min_size);
-    for (key, value) in map_iter {
-        if let Some(val) = transform(value) {
-            hash_map.insert(key.to_owned(), val);
-        }
-    }
-    hash_map
-}
-
-fn hashmap_to_serde_object<V, F>(hash_map: &HashMap<String, V>, transform: F) -> Value
-where
-    F: Fn(&V) -> Option<Value>,
-{
-    let hash_map_iter = hash_map.iter();
-    let (min_size, _) = hash_map_iter.size_hint();
-    let mut map = Map::with_capacity(min_size);
-    for (key, value) in hash_map_iter {
-        if let Some(val) = transform(value) {
-            map.insert(key.to_owned(), val);
-        }
-    }
-    Value::Object(map)
-}
-
-trait ClientData {
-    // As needed by serenity::prelude::ShareMap and HashMap's K
-    type Id: 'static + Sync + Send + Eq + Hash + Copy;
-    fn from_file(id: Self::Id) -> Self;
-    fn save(&mut self) -> MaybeError;
-}
-
-struct GuildData {
-    id: GuildId,
-    count: u64,
-    whois_url: Option<String>,
-    whois_headers: Vec<String>,
-    whois_data: Vec<Vec<String>>,
-}
-
-impl GuildData {
-    fn get_whois_entry_by_id(&self, id: &String) -> Option<&Vec<String>> {
-        self.whois_headers
-            .iter()
-            .position(|header| header.to_ascii_lowercase().contains("id"))
-            .and_then(|id_index| {
-                self.whois_data
-                    .iter()
-                    .find(|entry| match entry.get(id_index) {
-                        Some(entry_id) => entry_id == id,
-                        None => false,
-                    })
-            })
-    }
-}
-
-impl ClientData for GuildData {
-    type Id = GuildId;
-
-    fn from_file(id: GuildId) -> Self {
-        if let Some(json) = File::open(format!("data/guilds/{}.json", id))
-            .ok()
-            .and_then(|file| from_reader::<File, Value>(file).ok())
-        {
-            Self {
-                id,
-                count: json
-                    .get("count")
-                    .and_then(|value| value.as_u64())
-                    .unwrap_or(0),
-                whois_url: json
-                    .get("whois_url")
-                    .and_then(|value| value.as_str())
-                    .map(|str| String::from(str)),
-                whois_headers: json
-                    .get("whois_headers")
-                    .and_then(|value| {
-                        serde_value_to_vec(value, |val| val.as_str().map(|str| String::from(str)))
-                    })
-                    .unwrap_or_else(|| Vec::new()),
-                whois_data: json
-                    .get("whois_data")
-                    .and_then(|value| {
-                        serde_value_to_vec(value, |val| {
-                            serde_value_to_vec(val, |v| v.as_str().map(|str| String::from(str)))
-                        })
-                    })
-                    .unwrap_or_else(|| Vec::new()),
-            }
-        } else {
-            Self {
-                id,
-                count: 0,
-                whois_url: None,
-                whois_headers: Vec::new(),
-                whois_data: Vec::new(),
-            }
-        }
-    }
-
-    fn save(&mut self) -> MaybeError {
-        let mut object = Map::new();
-        if let Some(number) = Number::from_f64(self.count as f64) {
-            object.insert(String::from("count"), Value::Number(number));
-        }
-        object.insert(
-            String::from("whois_url"),
-            self.whois_url
-                .as_ref()
-                .map_or_else(|| Value::Null, |str| Value::String(str.clone())),
-        );
-        object.insert(
-            String::from("whois_headers"),
-            Value::Array(
-                self.whois_headers
-                    .iter()
-                    .map(|str| Value::String(str.clone()))
-                    .collect(),
-            ),
-        );
-        object.insert(
-            String::from("whois_data"),
-            Value::Array(
-                self.whois_data
-                    .iter()
-                    .map(|vec| {
-                        Value::Array(vec.iter().map(|str| Value::String(str.clone())).collect())
-                    })
-                    .collect(),
-            ),
-        );
-        let json = Value::Object(object);
-        serde_json::to_writer(
-            &File::create(format!("data/guilds/{}.json", self.id))?,
-            &json,
-        )?;
-        Ok(())
-    }
-}
-
-struct GuildDataKey;
-
-impl TypeMapKey for GuildDataKey {
-    type Value = HashMap<GuildId, GuildData>;
-}
-
-struct EmojiData {
-    id: GuildId,
-    emoji: HashMap<String, u64>,
-}
-
-impl ClientData for EmojiData {
-    type Id = GuildId;
-
-    fn from_file(id: GuildId) -> Self {
-        if let Some(json) = File::open(format!("data/emoji/{}.json", id))
-            .ok()
-            .and_then(|file| from_reader::<File, Value>(file).ok())
-        {
-            Self {
-                id,
-                emoji: json
-                    .as_object()
-                    .map(|map| serde_map_to_hashmap(map, |value| value.as_u64()))
-                    .unwrap_or_else(|| HashMap::new()),
-            }
-        } else {
-            Self {
-                id,
-                emoji: HashMap::new(),
-            }
-        }
-    }
-
-    fn save(&mut self) -> MaybeError {
-        let json = hashmap_to_serde_object(&self.emoji, |num| {
-            Number::from_f64(*num as f64).map(|float| Value::Number(float))
-        });
-        serde_json::to_writer(
-            &File::create(format!("data/emoji/{}.json", self.id))?,
-            &json,
-        )?;
-        Ok(())
-    }
-}
-
-struct EmojiDataKey;
-
-impl TypeMapKey for EmojiDataKey {
-    type Value = HashMap<GuildId, EmojiData>;
-}
+use client_data::{
+    emoji_data::{EmojiData, EmojiDataKey},
+    guild_data::{GuildData, GuildDataKey},
+    ClientData,
+};
+use dotenv::dotenv;
+pub use dumb_error::MaybeError;
+use regex::Regex;
+use reqwest::{blocking::get, Url};
+use serenity::{
+    model::{channel::Message, gateway::Ready, prelude::CurrentUser},
+    prelude::*,
+};
+use std::{collections::HashMap, env, fs::create_dir_all, sync::Mutex};
 
 enum GuildCommand {
     GuildCount,
@@ -266,20 +59,6 @@ impl Command {
         }
     }
 }
-
-// fn get_client_data<'a, K, D>(ctx: &'a Context, id: D::Id) -> &'a mut D
-// where
-//     K: TypeMapKey<Value = HashMap<D::Id, D>>,
-//     // D is 'static because of D::Id
-//     D: ClientData + 'static + Sync + Send,
-// {
-//     ctx.data
-//         .write()
-//         .get_mut::<K>()
-//         .unwrap()
-//         .entry(id)
-//         .or_insert_with(|| D::from_file(id))
-// }
 
 struct Handler {
     count: Mutex<u32>,
