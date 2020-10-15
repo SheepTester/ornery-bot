@@ -75,6 +75,7 @@ enum Command {
     Help,
     MostUsedEmoji(usize),
     LeastUsedEmoji(usize),
+    Playground,
     GuildCommand(GuildCommand),
     Ignore,
 }
@@ -86,6 +87,7 @@ impl Command {
             "kk moofy" => Self::GuildCommand(GuildCommand::GuildCount),
             "moofy ponder" => Self::Ponder,
             "moofy what pisses you off" => Self::Help,
+            "piñata uau" => Self::Playground,
             _ => {
                 lazy_static! {
                     static ref ADD_WEBTOON: Regex =
@@ -184,7 +186,7 @@ impl Handler {
                 lazy_static! {
                     static ref DIGITS: Regex = Regex::new(r"\d+").unwrap();
                 }
-                let whois_resolution = match DIGITS.find(user.as_str()) {
+                let mut whois_resolution = match DIGITS.find(user.as_str()) {
                     Some(rmatch) => {
                         let id = String::from(rmatch.as_str());
                         match guild_data.get_whois_entry_by_id(&id) {
@@ -194,6 +196,45 @@ impl Handler {
                     }
                     None => WhoisResolution::NoUser,
                 };
+                match whois_resolution {
+                    WhoisResolution::EntryFound(..) => (),
+                    _ => match msg.guild(&ctx.cache) {
+                        Some(guild_lock) => {
+                            let search = user.to_lowercase();
+                            let guild = guild_lock.read();
+                            let maybe_id = guild.members.iter().find_map(|(user_id, member)| {
+                                if member
+                                    .nick
+                                    .as_ref()
+                                    .filter(|nick| nick == &&search)
+                                    .is_some()
+                                    || {
+                                        let user = member.user.read();
+                                        let lowercase_name = user.name.to_lowercase().to_string();
+                                        lowercase_name == search
+                                            || format!(
+                                                "{}#{:04}",
+                                                lowercase_name, user.discriminator
+                                            ) == search
+                                    }
+                                {
+                                    Some(user_id.to_string())
+                                } else {
+                                    None
+                                }
+                            });
+                            let maybe_entry = maybe_id
+                                .as_ref()
+                                .and_then(|id| guild_data.get_whois_entry_by_id(&id));
+                            whois_resolution = match (maybe_id, maybe_entry) {
+                                (Some(id), Some(entry)) => WhoisResolution::EntryFound(id, entry),
+                                (Some(id), None) => WhoisResolution::UserFound(id),
+                                (None, _) => WhoisResolution::NoUser,
+                            };
+                        }
+                        None => (),
+                    },
+                }
                 match whois_resolution {
                     WhoisResolution::EntryFound(id, entry) => {
                         msg.channel_id.send_message(&ctx.http, |message| {
@@ -217,18 +258,11 @@ impl Handler {
                         })?;
                     }
                     WhoisResolution::UserFound(id) => {
-                        send_with_embed(
-                            &ctx,
-                            &msg,
-                            "idk who they are lmao",
-                            &format!("<@{}>", id),
-                        )?;
+                        send_with_embed(&ctx, &msg, "oof idk them", &format!("<@{}>", id))?;
                     }
                     WhoisResolution::NoUser => {
                         msg.channel_id
-                            .say(&ctx.http, "sry i need the id im working on it tho")?;
-                        // msg.channel_id
-                        //     .say(&ctx.http, "idk who ur talkin bout lmao")?;
+                            .say(&ctx.http, "idk who ur talkin bout lmao")?;
                     }
                 }
             }
@@ -383,18 +417,23 @@ impl Handler {
             lazy_static! {
                 static ref EMOJI: Regex = Regex::new(r"<a?:\w+:(\d+)>").unwrap();
             }
-            let mut data = ctx.data.write();
-            let emoji_data = data
-                .get_mut::<EmojiDataKey>()
-                .unwrap()
-                .entry(guild_id)
-                .or_insert_with(|| EmojiData::from_file(guild_id));
-            for captures in EMOJI.captures_iter(msg.content.as_str()) {
-                if let Some(rmatch) = captures.get(1) {
-                    emoji_data.track_emoji(String::from(rmatch.as_str()));
+            let emoji: Vec<String> = EMOJI
+                .captures_iter(msg.content.as_str())
+                .filter_map(|captures| captures.get(1))
+                .map(|rmatch| String::from(rmatch.as_str()))
+                .collect();
+            if emoji.len() > 0 {
+                let mut data = ctx.data.write();
+                let emoji_data = data
+                    .get_mut::<EmojiDataKey>()
+                    .unwrap()
+                    .entry(guild_id)
+                    .or_insert_with(|| EmojiData::from_file(guild_id));
+                for emoji_id in emoji {
+                    emoji_data.track_emoji(emoji_id);
                 }
+                emoji_data.save()?;
             }
-            emoji_data.save()?;
         }
 
         match Command::parse(&msg, &current_user) {
@@ -422,7 +461,7 @@ impl Handler {
             Command::WhoisOld => {
                 msg.channel_id.say(
                     &ctx.http,
-                    "-5 karma. im emo now so pls use `bruh who is <user id or mention>`",
+                    "-5 karma. im emo now so pls use `bruh who is <user>`",
                 )?;
             }
 
@@ -491,6 +530,26 @@ impl Handler {
                 } else {
                     msg.channel_id
                         .say(&ctx.http, "dont care about the custom emoji u send me")?;
+                }
+            }
+
+            Command::Playground => {
+                if let Some(guild_lock) = msg.guild(&ctx.cache) {
+                    let guild = guild_lock.read();
+                    msg.channel_id.say(
+                        &ctx.http,
+                        format!(
+                            "{} members {} also do you exist {}",
+                            guild.members.len(),
+                            guild
+                                .members
+                                .iter()
+                                .last()
+                                .map(|(id, _)| id.to_string())
+                                .unwrap_or(format!("uhh")),
+                            guild.members.contains_key(&msg.author.id),
+                        ),
+                    )?;
                 }
             }
 
