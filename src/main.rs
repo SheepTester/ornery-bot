@@ -19,7 +19,7 @@ use serenity::{
         channel::{Message, Reaction, ReactionType},
         gateway::Ready,
         id::GuildId,
-        prelude::CurrentUser,
+        prelude::{Activity, CurrentUser},
     },
     prelude::*,
 };
@@ -69,6 +69,7 @@ enum Command {
     GlobalCount,
     Ponder,
     WhoisOld,
+    Help,
     GuildCommand(GuildCommand),
     Ignore,
 }
@@ -79,6 +80,7 @@ impl Command {
             "ok moofy" => Self::GlobalCount,
             "kk moofy" => Self::GuildCommand(GuildCommand::GuildCount),
             "moofy ponder" => Self::Ponder,
+            "moofy what pisses you off" => Self::Help,
             _ => {
                 lazy_static! {
                     static ref ADD_WEBTOON: Regex =
@@ -397,8 +399,12 @@ impl Handler {
             Command::WhoisOld => {
                 msg.channel_id.say(
                     &ctx.http,
-                    "-5 karma. im emo now so pls use `bruh who is <name>`",
+                    "-5 karma. im emo now so pls use `bruh who is <user id or mention>`",
                 )?;
+            }
+
+            Command::Help => {
+                msg.channel_id.say(&ctx.http, include_str!("./help.md"))?;
             }
 
             Command::Ignore => (),
@@ -423,8 +429,9 @@ impl Handler {
         return Ok(());
     }
 
-    fn ready(&self, _: Context, ready: Ready) -> MaybeError {
+    fn ready(&self, ctx: Context, ready: Ready) -> MaybeError {
         println!("{} is connected!", ready.user.name);
+        ctx.set_activity(Activity::listening("ask me \"moofy what pisses you off\""));
         return Ok(());
     }
 }
