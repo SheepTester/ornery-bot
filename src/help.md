@@ -6,3 +6,6 @@ you know what really grinds my gears? when people say `ok moofy`, `kk moofy`, `m
 `moofy check out <name> at <url>` given webtoon episode list page i will set up a nice command for you to check it
 `:<name>` gets latest webtoon episode
 `moofy do not read <name>` stop checking
+
+`top <number> most used emoji` im tracking your emoji usage.
+`top <number> least used emoji`

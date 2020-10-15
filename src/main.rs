@@ -49,6 +49,9 @@ fn send_with_embed(
     Ok(())
 }
 
+/// Maximum number of emoji that can be sent in the most/least used emoji commands
+const MAX_EMOJI: usize = 25;
+
 enum WhoisResolution<'a> {
     EntryFound(String, &'a Vec<String>),
     UserFound(String),
@@ -70,6 +73,8 @@ enum Command {
     Ponder,
     WhoisOld,
     Help,
+    MostUsedEmoji(usize),
+    LeastUsedEmoji(usize),
     GuildCommand(GuildCommand),
     Ignore,
 }
@@ -87,6 +92,10 @@ impl Command {
                         Regex::new(r"moofy check out (\w+) at (.+)").unwrap();
                     static ref REMOVE_WEBTOON: Regex =
                         Regex::new(r"moofy do not read (\w+)").unwrap();
+                    static ref MOST_USED_EMOJI: Regex =
+                        Regex::new(r"top (\d+) most used emoji").unwrap();
+                    static ref LEAST_USED_EMOJI: Regex =
+                        Regex::new(r"top (\d+) least used emoji").unwrap();
                 }
                 if msg.content.starts_with(":whois") {
                     Self::WhoisOld
@@ -111,6 +120,20 @@ impl Command {
                     Self::GuildCommand(GuildCommand::RemoveWebtoon(String::from(
                         captures.get(1).map(|rmatch| rmatch.as_str()).unwrap_or(""),
                     )))
+                } else if let Some(captures) = MOST_USED_EMOJI.captures(msg.content.as_str()) {
+                    Self::MostUsedEmoji(
+                        captures
+                            .get(1)
+                            .and_then(|rmatch| rmatch.as_str().parse::<usize>().ok())
+                            .unwrap_or(MAX_EMOJI + 1),
+                    )
+                } else if let Some(captures) = LEAST_USED_EMOJI.captures(msg.content.as_str()) {
+                    Self::LeastUsedEmoji(
+                        captures
+                            .get(1)
+                            .and_then(|rmatch| rmatch.as_str().parse::<usize>().ok())
+                            .unwrap_or(MAX_EMOJI + 1),
+                    )
                 } else {
                     Self::Ignore
                 }
@@ -405,6 +428,70 @@ impl Handler {
 
             Command::Help => {
                 msg.channel_id.say(&ctx.http, include_str!("./help.md"))?;
+            }
+
+            Command::MostUsedEmoji(limit) => {
+                if limit > MAX_EMOJI {
+                    msg.channel_id.say(&ctx.http, "thats too many emoji")?;
+                } else if let Some(guild_id) = msg.guild_id {
+                    let mut data = ctx.data.write();
+                    let emoji_data = data
+                        .get_mut::<EmojiDataKey>()
+                        .unwrap()
+                        .entry(guild_id)
+                        .or_insert_with(|| EmojiData::from_file(guild_id));
+                    let mut emoji_list = emoji_data.emoji.iter().collect::<Vec<_>>();
+                    if emoji_list.is_empty() {
+                        msg.channel_id.say(&ctx.http, "no emoji oop")?;
+                    } else {
+                        emoji_list.sort_unstable_by(|(_, a), (_, b)| b.cmp(a));
+                        msg.channel_id.say(
+                            &ctx.http,
+                            emoji_list
+                                .iter()
+                                .take(limit)
+                                .map(|(emoji_id, count)| format!("<:z:{}> {}", emoji_id, count))
+                                .collect::<Vec<_>>()
+                                .join("\n"),
+                        )?;
+                    }
+                } else {
+                    msg.channel_id.say(
+                        &ctx.http,
+                        "dont care about the custom emoji u send me fuck off",
+                    )?;
+                }
+            }
+
+            Command::LeastUsedEmoji(limit) => {
+                if limit > MAX_EMOJI {
+                    msg.channel_id.say(&ctx.http, "thats too many emoji")?;
+                } else if let Some(guild_id) = msg.guild_id {
+                    let mut data = ctx.data.write();
+                    let emoji_data = data
+                        .get_mut::<EmojiDataKey>()
+                        .unwrap()
+                        .entry(guild_id)
+                        .or_insert_with(|| EmojiData::from_file(guild_id));
+                    let mut emoji_list = emoji_data.emoji.iter().collect::<Vec<_>>();
+                    if emoji_list.is_empty() {
+                        msg.channel_id.say(&ctx.http, "no emoji oop")?;
+                    } else {
+                        emoji_list.sort_unstable_by(|(_, a), (_, b)| a.cmp(b));
+                        msg.channel_id.say(
+                            &ctx.http,
+                            emoji_list
+                                .iter()
+                                .take(limit)
+                                .map(|(emoji_id, count)| format!("<:z:{}> {}", emoji_id, count))
+                                .collect::<Vec<_>>()
+                                .join("\n"),
+                        )?;
+                    }
+                } else {
+                    msg.channel_id
+                        .say(&ctx.http, "dont care about the custom emoji u send me")?;
+                }
             }
 
             Command::Ignore => (),
