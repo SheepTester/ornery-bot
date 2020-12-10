@@ -12,9 +12,15 @@ use serenity::{
 // Limit all commands to be guild-restricted.
 #[only_in(guilds)]
 #[commands(slow_mode)]
+/// Only the creator of this bot can use these commands!
 struct Owner;
 
 #[command]
+#[usage = "<time>"]
+#[example = ""]
+#[example = "30"]
+/// Sets the slow mode to the number of seconds if given, or simply determines the slow mode time
+/// for the channel.
 async fn slow_mode(ctx: &Context, msg: &Message, mut args: Args) -> CommandResult {
     let say_content = if let Ok(slow_mode_rate_seconds) = args.single::<u64>() {
         if let Err(why) = msg

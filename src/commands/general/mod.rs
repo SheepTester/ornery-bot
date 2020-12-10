@@ -32,6 +32,7 @@ impl TypeMapKey for CommandCounter {
 
 #[group]
 #[commands(about, am_i_admin, say, commands, ping, latency, some_long_command)]
+/// All the top-level commands you can use without using a quote-unquote "prefix."
 struct General;
 
 // Commands can be created via the attribute `#[command]` macro.
@@ -39,8 +40,9 @@ struct General;
 // Options are passed via subsequent attributes.
 // Make this command use the "complicated" bucket.
 #[bucket = "complicated"]
+/// Lists the number of times each command has been used since the bot last woke up.
 async fn commands(ctx: &Context, msg: &Message) -> CommandResult {
-    let mut contents = "Commands used:\n".to_string();
+    let mut contents = "Commands used since last restart:\n".to_string();
 
     let data = ctx.data.read().await;
     let counter = data
@@ -60,6 +62,9 @@ async fn commands(ctx: &Context, msg: &Message) -> CommandResult {
 // mentions are replaced with a safe textual alternative.
 // In this example channel mentions are excluded via the `ContentSafeOptions`.
 #[command]
+#[usage = "<message>"]
+#[example = "Moofy is passable in quality. He is whom I aspire to be."]
+/// I repeat your message. Good luck making me ping!
 async fn say(ctx: &Context, msg: &Message, args: Args) -> CommandResult {
     let settings = if let Some(guild_id) = msg.guild_id {
         // By default roles, users, and channel mentions are cleaned.
@@ -84,6 +89,9 @@ async fn say(ctx: &Context, msg: &Message, args: Args) -> CommandResult {
 }
 
 #[command]
+#[usage = "<...arguments>"]
+#[example = "The panda eats, shoots, and leaves."]
+/// Prints the command arguments
 async fn some_long_command(ctx: &Context, msg: &Message, args: Args) -> CommandResult {
     msg.channel_id
         .say(&ctx.http, &format!("Arguments: {:?}", args.rest()))
@@ -93,15 +101,17 @@ async fn some_long_command(ctx: &Context, msg: &Message, args: Args) -> CommandR
 }
 
 #[command]
+/// Allow me to introduce myself.
 async fn about(ctx: &Context, msg: &Message) -> CommandResult {
     msg.channel_id
-        .say(&ctx.http, "This is a small test-bot! : )")
+        .say(&ctx.http, "Hi, I'm Moofy (he, him, etc.) running ornery-bot 0.9.")
         .await?;
 
     Ok(())
 }
 
 #[command]
+/// Gets super technical information about these newfangled "shards."
 async fn latency(ctx: &Context, msg: &Message) -> CommandResult {
     // The shard manager is an interface for mutating, stopping, restarting, and
     // retrieving information about shards.
@@ -142,8 +152,9 @@ async fn latency(ctx: &Context, msg: &Message) -> CommandResult {
 // Limit command usage to guilds.
 #[only_in(guilds)]
 #[checks(Owner)]
+/// Responds with pong.
 async fn ping(ctx: &Context, msg: &Message) -> CommandResult {
-    msg.channel_id.say(&ctx.http, "Pong! : )").await?;
+    msg.channel_id.say(&ctx.http, "PONG.").await?;
 
     Ok(())
 }
@@ -152,6 +163,7 @@ async fn ping(ctx: &Context, msg: &Message) -> CommandResult {
 // #[required_permissions(ADMINISTRATOR)]
 // but that would not let us reply when it fails.
 #[command]
+/// Says if you have administrator permissions or not.
 async fn am_i_admin(ctx: &Context, msg: &Message, _args: Args) -> CommandResult {
     if let Some(member) = &msg.member {
         for role in &member.roles {

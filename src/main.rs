@@ -8,11 +8,14 @@
 //! git = "https://github.com/serenity-rs/serenity.git"
 //! features = ["framework", "standard_framework"]
 //! ```
+use commands::hooks;
 use serenity::{
     async_trait,
-    framework::standard::{macros::command, Args, CommandResult, DispatchError, StandardFramework},
+    client::{Context, EventHandler},
+    framework::standard::{macros::command, Args, CommandResult, StandardFramework},
     http::Http,
     model::{channel::Message, gateway::Ready},
+    Client,
 };
 use std::{
     collections::{HashMap, HashSet},
@@ -21,7 +24,7 @@ use std::{
 };
 
 mod commands;
-mod hooks;
+mod consts;
 
 struct Handler;
 
@@ -30,32 +33,6 @@ impl EventHandler for Handler {
     async fn ready(&self, _: Context, ready: Ready) {
         println!("{} is connected!", ready.user.name);
     }
-}
-
-// You can construct a hook without the use of a macro, too.
-// This requires some boilerplate though and the following additional import.
-use serenity::{
-    client::{Context, EventHandler},
-    futures::future::BoxFuture,
-    Client, FutureExt,
-};
-fn _dispatch_error_no_macro<'fut>(
-    ctx: &'fut mut Context,
-    msg: &'fut Message,
-    error: DispatchError,
-) -> BoxFuture<'fut, ()> {
-    async move {
-        if let DispatchError::Ratelimited(duration) = error {
-            let _ = msg
-                .channel_id
-                .say(
-                    &ctx.http,
-                    &format!("Try this again in {} seconds.", duration.as_secs()),
-                )
-                .await;
-        };
-    }
-    .boxed()
 }
 
 #[tokio::main]
@@ -92,6 +69,7 @@ async fn main() {
                 // Sets the bot's owners. These will be used for commands that
                 // are owners only.
                 .owners(owners)
+                .on_mention(Some(bot_id))
         })
         // Set a function to be called prior to each command execution. This
         // provides the context of the command, the message that was received,
@@ -145,8 +123,6 @@ async fn main() {
 }
 
 #[command]
-// Limits the usage of this command to roles named:
-#[allowed_roles("mods", "ultimate neko")]
 async fn about_role(ctx: &Context, msg: &Message, args: Args) -> CommandResult {
     let potential_role_name = args.rest();
 

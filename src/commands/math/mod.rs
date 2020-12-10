@@ -13,11 +13,15 @@ use serenity::{
 // via `:math` instead of just `:`.
 #[prefix = "math"]
 #[commands(multiply)]
+/// A very limited set of calculator commands. See `:help math multiply` for more info.
 struct Math;
 
 #[command]
 // Lets us also call `:math *` instead of just `:math multiply`.
 #[aliases("*")]
+#[usage = "<a> <b>"]
+#[example = "3 4"]
+/// Multiplies two floats.
 async fn multiply(ctx: &Context, msg: &Message, mut args: Args) -> CommandResult {
     let first = args.single::<f64>()?;
     let second = args.single::<f64>()?;
