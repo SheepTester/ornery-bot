@@ -17,7 +17,7 @@ use serenity::{
 // Sets a command that will be executed if only a group-prefix was passed.
 #[default_command(bird)]
 #[commands(cat, sheep)]
-/// A group with commands providing from a limited set of emoji in response.
+#[description = "A group with commands providing from a limited set of emoji in response."]
 struct Emoji;
 
 #[command]

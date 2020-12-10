@@ -13,7 +13,7 @@ use serenity::{
 // via `:math` instead of just `:`.
 #[prefix = "math"]
 #[commands(multiply)]
-/// A very limited set of calculator commands. See `:help math multiply` for more info.
+#[description = "A very limited set of calculator commands. See `:help math multiply` for more info."]
 struct Math;
 
 #[command]

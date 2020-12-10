@@ -12,7 +12,7 @@ use serenity::{
 // Limit all commands to be guild-restricted.
 #[only_in(guilds)]
 #[commands(slow_mode)]
-/// Only the creator of this bot can use these commands!
+#[description = "Only the creator of this bot can use these commands!"]
 struct Owner;
 
 #[command]

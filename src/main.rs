@@ -24,6 +24,8 @@ use std::{
 };
 
 mod commands;
+mod db;
+mod error_with_reason;
 
 struct Handler;
 
@@ -102,6 +104,7 @@ async fn main() {
         // #name is turned all uppercase
         .help(&commands::help::MY_HELP)
         .group(&commands::general::GENERAL_GROUP)
+        .group(&commands::test::TEST_GROUP)
         .group(&commands::emoji::EMOJI_GROUP)
         .group(&commands::math::MATH_GROUP)
         .group(&commands::owner::OWNER_GROUP);
@@ -112,10 +115,13 @@ async fn main() {
         .await
         .expect("Err creating client");
 
+    let db = db::init_db().await.expect("Problem connecting to the MongoDB server.");
+
     {
         let mut data = client.data.write().await;
         data.insert::<commands::general::CommandCounter>(HashMap::default());
         data.insert::<commands::general::ShardManagerContainer>(Arc::clone(&client.shard_manager));
+        data.insert::<db::Db>(db);
     }
 
     if let Err(why) = client.start().await {

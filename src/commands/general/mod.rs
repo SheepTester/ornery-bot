@@ -32,7 +32,7 @@ impl TypeMapKey for CommandCounter {
 
 #[group]
 #[commands(about, am_i_admin, say, commands, ping, latency, some_long_command)]
-/// All the top-level commands you can use without using a quote-unquote "prefix."
+#[description = "All the top-level commands you can use without using a quote-unquote \"prefix.\""]
 struct General;
 
 // Commands can be created via the attribute `#[command]` macro.
