@@ -1,7 +1,10 @@
+use lazy_static::lazy_static;
+use regex::{Regex, RegexBuilder};
 use serenity::{
     client::Context,
     framework::standard::{macros::hook, CommandResult, DispatchError},
     model::channel::Message,
+    utils::Colour,
 };
 
 #[hook]
@@ -23,13 +26,24 @@ pub async fn before(ctx: &Context, _: &Message, command_name: &str) -> bool {
 
 #[hook]
 pub async fn after(
-    _ctx: &Context,
-    _msg: &Message,
+    ctx: &Context,
+    msg: &Message,
     command_name: &str,
     command_result: CommandResult,
 ) {
     if let Err(why) = command_result {
-        println!("Command '{}' returned error {:?}", command_name, why);
+        let _ = msg
+            .channel_id
+            .send_message(&ctx.http, |message| {
+                message.embed(|embed| {
+                    embed.description(format!("```rs\n{:?}\n```", why));
+                    embed.colour(Colour::RED);
+                    embed
+                });
+                message.content(format!("Command '{}' returned error", command_name));
+                message
+            })
+            .await;
     }
 }
 
@@ -38,10 +52,23 @@ pub async fn after(
 //     println!("Could not find command named '{}'", unknown_command_name);
 // }
 
-// #[hook]
-// pub async fn normal_message(_ctx: &Context, msg: &Message) {
-//     println!("Message is not a command '{}'", msg.content);
-// }
+#[hook]
+pub async fn normal_message(ctx: &Context, msg: &Message) {
+    lazy_static! {
+        static ref MENTIONED_MOOFY: Regex = RegexBuilder::new(r"\bmoofy\b")
+            .case_insensitive(true)
+            .build()
+            .unwrap();
+    }
+    if MENTIONED_MOOFY.is_match(&msg.content) {
+        let _ = msg.react(&ctx.http, '❗').await;
+    } else if let Ok(true) = msg.mentions_me(&ctx.http).await {
+        let _ = msg
+            .channel_id
+            .say(&ctx.http, "<:ping:719277539113041930>")
+            .await;
+    }
+}
 
 #[hook]
 pub async fn dispatch_error(ctx: &Context, msg: &Message, error: DispatchError) {

@@ -43,6 +43,8 @@ use std::collections::HashSet;
 // cases of ::strikethrough-commands::, but only if
 // `strikethrough_commands_tip_{dm, guild}` aren't specified.
 // If you pass in a value, it will be displayed instead.
+// Only supports built-in colours
+#[embed_success_colour = "MAGENTA"]
 pub async fn my_help(
     context: &Context,
     msg: &Message,
@@ -51,18 +53,6 @@ pub async fn my_help(
     groups: &[&'static CommandGroup],
     owners: HashSet<UserId>,
 ) -> CommandResult {
-    let _ = help_commands::with_embeds(
-        context,
-        msg,
-        args,
-        &HelpOptions {
-            // You can't use custom colours an attribute yet
-            embed_success_colour: crate::consts::THEME,
-            ..help_options.clone()
-        },
-        groups,
-        owners,
-    )
-    .await;
+    let _ = help_commands::with_embeds(context, msg, args, help_options, groups, owners).await;
     Ok(())
 }

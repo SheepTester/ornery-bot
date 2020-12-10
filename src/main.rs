@@ -24,7 +24,6 @@ use std::{
 };
 
 mod commands;
-mod consts;
 
 struct Handler;
 
@@ -90,6 +89,8 @@ async fn main() {
         // reason or another. For example, when a user has exceeded a rate-limit or a command
         // can only be performed by the bot owner.
         .on_dispatch_error(hooks::dispatch_error)
+        .normal_message(hooks::normal_message)
+        .prefix_only(hooks::normal_message)
         // Can't be used more than once per 5 seconds:
         .bucket("emoji", |b| b.delay(5))
         .await
