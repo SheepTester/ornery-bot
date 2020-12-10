@@ -1,6 +1,6 @@
 [package]
 name = "ornery-bot"
-version = "0.1.0"
+version = "0.2.0"
 authors = ["SheepTester <ussa.say@gmail.com>"]
 edition = "2018"
 
@@ -23,4 +23,4 @@ version = "1.1.1"
 
 [dependencies.tokio]
 version = "0.2"
-features = ["macros"]
+features = ["macros", "signal"]

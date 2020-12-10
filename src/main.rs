@@ -11,10 +11,13 @@
 use commands::hooks;
 use serenity::{
     async_trait,
-    client::{Context, EventHandler},
+    client::{
+        bridge::gateway::{ChunkGuildFilter, GatewayIntents},
+        Context, EventHandler,
+    },
     framework::standard::{macros::command, Args, CommandResult, StandardFramework},
     http::Http,
-    model::{channel::Message, gateway::Ready},
+    model::{channel::Message, gateway::Ready, id::GuildId},
     Client,
 };
 use std::{
@@ -31,8 +34,27 @@ struct Handler;
 
 #[async_trait]
 impl EventHandler for Handler {
-    async fn ready(&self, _: Context, ready: Ready) {
-        println!("{} is connected!", ready.user.name);
+    async fn ready(&self, ctx: Context, ready: Ready) {
+        println!("ready.");
+        if let Some(shard) = ready.shard {
+            // Note that array index 0 is 0-indexed, while index 1 is 1-indexed.
+            // This may seem unintuitive, but it models Discord's behaviour.
+            println!(
+                "{} is connected on shard {}/{}!",
+                ready.user.name, shard[0], shard[1],
+            );
+        }
+    }
+
+    // https://github.com/Flat/Lupusregina-/blame/6ce8d19e34fac4e8aa573deeaa8af81b2f28dad7/src/main.rs#L51
+    async fn cache_ready(&self, ctx: Context, guilds: Vec<GuildId>) {
+        println!("cache_ready.");
+        // for guild_id in guilds {
+        //     println!("{}", guild_id);
+        //     ctx.shard
+        //         .chunk_guild(guild_id, None, ChunkGuildFilter::None, None);
+        // }
+        println!("{} unknown members", ctx.cache.unknown_members().await);
     }
 }
 
@@ -112,16 +134,38 @@ async fn main() {
     let mut client = Client::builder(&token)
         .event_handler(Handler)
         .framework(framework)
+        // https://github.com/serenity-rs/serenity/blob/current/examples/e11_gateway_intents/src/main.rs#L40
+        // .add_intent(GatewayIntents::GUILD_MEMBERS)
         .await
         .expect("Err creating client");
 
-    let db = db::init_db().await.expect("Problem connecting to the MongoDB server.");
+    let db = db::init_db()
+        .await
+        .expect("Problem connecting to the MongoDB server.");
+
+    // {
+    //     let sm = client.shard_manager.lock().await;
+    //     for guild_id in client.cache_and_http.cache.guilds().await {
+    //         sm.chunk_guild(guild_id, None, ChunkGuildFilter::None, None);
+    //     }
+    // }
 
     {
         let mut data = client.data.write().await;
         data.insert::<commands::general::CommandCounter>(HashMap::default());
         data.insert::<commands::general::ShardManagerContainer>(Arc::clone(&client.shard_manager));
         data.insert::<db::Db>(db);
+    }
+
+    {
+        let shard_manager = client.shard_manager.clone();
+
+        tokio::spawn(async move {
+            tokio::signal::ctrl_c()
+                .await
+                .expect("Could not register ctrl+c handler");
+            shard_manager.lock().await.shutdown_all().await;
+        });
     }
 
     if let Err(why) = client.start().await {
