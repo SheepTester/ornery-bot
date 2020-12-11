@@ -14,7 +14,11 @@ use serenity::{
     client::{Context, EventHandler},
     framework::standard::{macros::command, Args, CommandResult, StandardFramework},
     http::Http,
-    model::{channel::Message, gateway::Ready, id::GuildId},
+    model::{
+        channel::Message,
+        gateway::{Activity, Ready},
+        id::GuildId,
+    },
     Client,
 };
 use std::{
@@ -31,7 +35,7 @@ struct Handler;
 
 #[async_trait]
 impl EventHandler for Handler {
-    async fn ready(&self, _ctx: Context, ready: Ready) {
+    async fn ready(&self, ctx: Context, ready: Ready) {
         println!("ready.");
         if let Some(shard) = ready.shard {
             // Note that array index 0 is 0-indexed, while index 1 is 1-indexed.
@@ -41,6 +45,7 @@ impl EventHandler for Handler {
                 ready.user.name, shard[0], shard[1],
             );
         }
+        ctx.set_activity(Activity::listening(":help")).await;
     }
 
     // https://github.com/Flat/Lupusregina-/blame/6ce8d19e34fac4e8aa573deeaa8af81b2f28dad7/src/main.rs#L51

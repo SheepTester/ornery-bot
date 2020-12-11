@@ -61,7 +61,7 @@ pub async fn normal_message(ctx: &Context, msg: &Message) {
             .unwrap();
     }
     if MENTIONED_MOOFY.is_match(&msg.content) {
-        let _ = msg.react(&ctx.http, '❗').await;
+        let _ = msg.react(&ctx.http, '👀').await;
     } else if let Ok(true) = msg.mentions_me(&ctx.http).await {
         let _ = msg
             .channel_id
