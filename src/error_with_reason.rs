@@ -5,12 +5,18 @@ use std::{
 
 /// An error type that contains a reason.
 #[derive(Debug)]
-pub struct ErrorWithReason<'a>(pub &'a str);
+pub struct ErrorWithReason(pub String);
 
-impl<'a> Display for ErrorWithReason<'a> {
+impl ErrorWithReason {
+    pub fn from(string: &str) -> Self {
+        ErrorWithReason(String::from(string))
+    }
+}
+
+impl Display for ErrorWithReason {
     fn fmt(&self, f: &mut Formatter) -> Result {
         write!(f, "{:?}", self)
     }
 }
 
-impl<'a> Error for ErrorWithReason<'a> {}
+impl Error for ErrorWithReason {}

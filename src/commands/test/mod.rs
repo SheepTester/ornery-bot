@@ -31,7 +31,7 @@ async fn count(ctx: &Context, msg: &Message, mut args: Args) -> CommandResult {
 
     let offset = args
         .single::<i32>()
-        .map_err(|_| ErrorWithReason("The given number doesn't seem to be an i32."))?;
+        .map_err(|_| ErrorWithReason::from("The given number doesn't seem to be an i32."))?;
 
     let guild_id = msg
         .guild_id
@@ -72,7 +72,7 @@ async fn count(ctx: &Context, msg: &Message, mut args: Args) -> CommandResult {
                 .await?;
         }
     } else {
-        Err(ErrorWithReason("No document was returned...?"))?;
+        Err(ErrorWithReason::from("No document was returned...?"))?;
     }
 
     Ok(())

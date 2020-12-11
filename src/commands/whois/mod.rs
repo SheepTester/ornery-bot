@@ -1,10 +1,12 @@
-use crate::db;
+use crate::{db, error_with_reason::ErrorWithReason};
 use lazy_static::lazy_static;
 use mongodb::{
     bson::{doc, Bson, Document},
+    options::UpdateOptions,
     Collection,
 };
 use regex::Regex;
+use reqwest::{get, Url};
 use serenity::{
     client::{bridge::gateway::ChunkGuildFilter, Context},
     framework::standard::{
@@ -26,14 +28,14 @@ async fn display_whois_entry(
     msg: &Message,
     whois_data: &Collection,
     guild_id: &u64,
-    id_field: &str,
     id: &String,
+    other_users: Option<&String>,
 ) -> CommandResult<bool> {
     match whois_data
         .find_one(
             doc! {
                 "_guild": guild_id,
-                id_field: id,
+                "_id": id,
             },
             None,
         )
@@ -43,7 +45,10 @@ async fn display_whois_entry(
             msg.channel_id
                 .send_message(&ctx.http, |message| {
                     message.embed(|embed| {
-                        embed.description(format!("What we know about <@{}>", id));
+                        embed.description(match other_users {
+                            Some(others) => format!("Other possible users that you meant:\n{}\n\nBut here's what we know about <@{}>", others, id),
+                            None => format!("What we know about <@{}>", id)
+                        });
                         for (key, value) in doc.iter() {
                             if !key.starts_with("_") {
                                 if let Bson::String(str) = value {
@@ -86,14 +91,6 @@ async fn whois(ctx: &Context, msg: &Message, args: Args) -> CommandResult {
     let db = data.get::<db::Db>().expect("Expected Db in TypeMap.");
 
     let whois_data = db.collection("whois-data");
-    let whois_settings = db.collection("whois-settings");
-
-    let settings = whois_settings
-        .find_one(doc! { "_guild": guild_id }, None)
-        .await?
-        .unwrap_or_else(|| Document::new());
-    // let id_field = settings.and_then(|doc| doc.get_str("id").ok()).unwrap_or("ID");
-    let id_field = settings.get_str("id").unwrap_or("ID");
 
     let username_search = args.rest();
 
@@ -103,7 +100,7 @@ async fn whois(ctx: &Context, msg: &Message, args: Args) -> CommandResult {
 
     if let Some(matched_id) = USER_ID.find(username_search) {
         let id = matched_id.as_str();
-        if display_whois_entry(ctx, msg, &whois_data, guild_id, id_field, &id.to_string()).await? {
+        if display_whois_entry(ctx, msg, &whois_data, guild_id, &id.to_string(), None).await? {
             return Ok(());
         }
     }
@@ -116,8 +113,8 @@ async fn whois(ctx: &Context, msg: &Message, args: Args) -> CommandResult {
             msg,
             &whois_data,
             guild_id,
-            id_field,
             &member.user.id.to_string(),
+            None,
         )
         .await?
         {
@@ -125,27 +122,46 @@ async fn whois(ctx: &Context, msg: &Message, args: Args) -> CommandResult {
         }
     }
 
-    let possibilities = guild.members_containing(username_search, false, true).await;
+    let mut possibilities = guild.members_containing(username_search, false, true).await;
+    let first_guess = possibilities.pop();
     let mut display_matches = String::new();
     for (member, _) in &possibilities {
         let line = format!("<@{}> ({})\n", member.user.id, member.user.id);
-        if display_matches.len() + line.len() > 2000 {
+        // 1900 to allow for other text
+        if display_matches.len() + line.len() > 1900 {
             break;
         }
         display_matches.push_str(line.as_str());
     }
+    if let Some((search_result, _)) = first_guess {
+        if display_whois_entry(
+            ctx,
+            msg,
+            &whois_data,
+            guild_id,
+            &search_result.user.id.to_string(),
+            Some(&display_matches),
+        )
+        .await?
+        {
+            return Ok(());
+        }
+    }
     msg.channel_id
         .send_message(&ctx.http, move |message| {
-            if possibilities.is_empty() {
-                message.content("I don't know whom you're referring to, sorry.");
-            } else {
+            if let Some((search_result, _)) = first_guess {
                 message.content(
-                    "Your given name doesn't match a name exactly, but perhaps you meant these?",
+                    "I don't know the person you're referring to. (Hint: Have the mods done `:whois fetch`?) Perhaps I may know these other users? If so, do `:whois <user id>`.",
                 );
                 message.embed(|embed| {
-                    embed.description(display_matches);
+                    embed.description(format!(
+                        "**<@{}> ({})\n**\n{}",
+                        search_result.user.id, search_result.user.id, display_matches
+                    ));
                     embed
                 });
+            } else {
+                message.content("I don't know the person you're referring to. (Hint: Have the mods done `:whois fetch`?)");
             }
             message
         })
@@ -156,7 +172,7 @@ async fn whois(ctx: &Context, msg: &Message, args: Args) -> CommandResult {
 
 #[command]
 #[usage = "\"[url]\" [id field]"]
-#[example = "\"https://example.com/users.csv\" \"ID\""]
+#[example = "\"https://example.com/users.csv\" \"User ID\""]
 #[example = ""]
 #[required_permissions("MANAGE_GUILD")]
 /// Fetch whois informaton from the given URL to a CSV file. The ID field will be used to identify
@@ -185,7 +201,7 @@ async fn fetch(ctx: &Context, msg: &Message, mut args: Args) -> CommandResult {
         .await?
         .unwrap_or_else(|| Document::new());
 
-    let url = match args.single_quoted::<String>() {
+    let url_str = match args.single_quoted::<String>() {
         Ok(url) => url,
         Err(ArgError::Eos) => {
             if let Ok(url) = settings.get_str("url") {
@@ -214,6 +230,60 @@ async fn fetch(ctx: &Context, msg: &Message, mut args: Args) -> CommandResult {
         }
         Err(err) => Err(err)?,
     };
+
+    let csv = get(Url::parse(&url_str)?.as_str()).await?.text().await?;
+    let mut reader = csv::Reader::from_reader(csv.as_bytes());
+    let headers = reader.headers()?.clone();
+    let mut data = Vec::new();
+
+    for (i, record) in reader.records().enumerate() {
+        let mut doc = doc! { "_guild": guild_id };
+        for (key, value) in headers.iter().zip(record?.iter()) {
+            doc.insert(key, Bson::String(String::from(value)));
+        }
+        let id_value = doc
+            .get(id_field.as_str())
+            .ok_or_else(|| {
+                ErrorWithReason(format!(
+                    "Row {} does not have a value for {}",
+                    i + 1,
+                    id_field
+                ))
+            })?
+            .clone();
+        doc.insert("_id", id_value);
+        data.push(doc);
+    }
+
+    whois_data
+        .delete_many(
+            doc! {
+                "_guild": guild_id,
+            },
+            None,
+        )
+        .await?;
+    whois_data.insert_many(data, None).await?;
+
+    whois_settings
+        .update_one(
+            doc! {
+                "_guild": guild_id,
+            },
+            doc! {
+                "$set": {
+                    "url": url_str,
+                    "id": id_field,
+                },
+                "$setOnInsert": {
+                    "_guild": &guild_id,
+                },
+            },
+            UpdateOptions::builder().upsert(true).build(),
+        )
+        .await?;
+
+    msg.react(&ctx.http, '👌').await?;
 
     Ok(())
 }
