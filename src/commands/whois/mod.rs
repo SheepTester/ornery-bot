@@ -46,14 +46,18 @@ async fn display_whois_entry(
                 .send_message(&ctx.http, |message| {
                     message.embed(|embed| {
                         embed.description(match other_users {
-                            Some(others) => format!("Other possible users that you meant:\n{}\n\nBut here's what we know about <@{}>", others, id),
+                            Some(others) => if others.is_empty() {
+                                format!("What we know about <@{}> (whom I'm guessing you're referring to)", id)
+                            } else {
+                                format!("Other possible users that you meant:\n{}\nBut here's what we know about <@{}>", others, id)
+                            },
                             None => format!("What we know about <@{}>", id)
                         });
                         for (key, value) in doc.iter() {
                             if !key.starts_with("_") {
                                 if let Bson::String(str) = value {
                                     if !str.is_empty() {
-                                        embed.field(key, value, true);
+                                        embed.field(key, str, true);
                                     }
                                 }
                             }
