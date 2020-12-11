@@ -11,10 +11,7 @@
 use commands::hooks;
 use serenity::{
     async_trait,
-    client::{
-        bridge::gateway::{ChunkGuildFilter, GatewayIntents},
-        Context, EventHandler,
-    },
+    client::{Context, EventHandler},
     framework::standard::{macros::command, Args, CommandResult, StandardFramework},
     http::Http,
     model::{channel::Message, gateway::Ready, id::GuildId},
@@ -34,7 +31,7 @@ struct Handler;
 
 #[async_trait]
 impl EventHandler for Handler {
-    async fn ready(&self, ctx: Context, ready: Ready) {
+    async fn ready(&self, _ctx: Context, ready: Ready) {
         println!("ready.");
         if let Some(shard) = ready.shard {
             // Note that array index 0 is 0-indexed, while index 1 is 1-indexed.
@@ -47,7 +44,7 @@ impl EventHandler for Handler {
     }
 
     // https://github.com/Flat/Lupusregina-/blame/6ce8d19e34fac4e8aa573deeaa8af81b2f28dad7/src/main.rs#L51
-    async fn cache_ready(&self, ctx: Context, guilds: Vec<GuildId>) {
+    async fn cache_ready(&self, ctx: Context, _guilds: Vec<GuildId>) {
         println!("cache_ready.");
         // for guild_id in guilds {
         //     println!("{}", guild_id);
@@ -127,6 +124,7 @@ async fn main() {
         .help(&commands::help::MY_HELP)
         .group(&commands::general::GENERAL_GROUP)
         .group(&commands::test::TEST_GROUP)
+        .group(&commands::whois::WHOIS_GROUP)
         .group(&commands::emoji::EMOJI_GROUP)
         .group(&commands::math::MATH_GROUP)
         .group(&commands::owner::OWNER_GROUP);
