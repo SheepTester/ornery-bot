@@ -21,3 +21,11 @@ in the same folder as ornery-bot.exe, then do
 ```sh
 cargo run
 ```
+
+To avoid conflicts with the bot running in production, you can add
+
+```
+PREFIX=~
+```
+
+to use a different prefix for development.

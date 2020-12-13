@@ -104,7 +104,7 @@ async fn some_long_command(ctx: &Context, msg: &Message, args: Args) -> CommandR
 /// Allow me to introduce myself.
 async fn about(ctx: &Context, msg: &Message) -> CommandResult {
     msg.channel_id
-        .say(&ctx.http, "Hi, I'm Moofy (he, him, etc.) running ornery-bot 0.9.")
+        .say(&ctx.http, "Hi, I'm Moofy (he, him, etc.) running ornery-bot 0.9.\n\nLike any good bot, I am a proud open-source bot: https://github.com/SheepTester/ornery-bot")
         .await?;
 
     Ok(())

@@ -12,10 +12,9 @@ use commands::hooks;
 use serenity::{
     async_trait,
     client::{Context, EventHandler},
-    framework::standard::{macros::command, Args, CommandResult, StandardFramework},
+    framework::standard::StandardFramework,
     http::Http,
     model::{
-        channel::Message,
         gateway::{Activity, Ready},
         id::GuildId,
     },
@@ -86,11 +85,12 @@ async fn main() {
         Err(why) => panic!("Could not access application info: {:?}", why),
     };
 
+    let prefix = env::var("PREFIX").unwrap_or(String::from(":"));
     let framework = StandardFramework::new()
         .configure(|c| {
             c.with_whitespace(true)
                 .on_mention(Some(bot_id))
-                .prefix(":")
+                .prefix(prefix.as_str())
                 // Sets the bot's owners. These will be used for commands that
                 // are owners only.
                 .owners(owners)
@@ -171,37 +171,7 @@ async fn main() {
         });
     }
 
-    if let Err(why) = client.start().await {
+    if let Err(why) = client.start_autosharded().await {
         println!("Client error: {:?}", why);
     }
-}
-
-#[command]
-async fn about_role(ctx: &Context, msg: &Message, args: Args) -> CommandResult {
-    let potential_role_name = args.rest();
-
-    if let Some(guild) = msg.guild(&ctx.cache).await {
-        // `role_by_name()` allows us to attempt attaining a reference to a role
-        // via its name.
-        if let Some(role) = guild.role_by_name(&potential_role_name) {
-            if let Err(why) = msg
-                .channel_id
-                .say(&ctx.http, &format!("Role-ID: {}", role.id))
-                .await
-            {
-                println!("Error sending message: {:?}", why);
-            }
-
-            return Ok(());
-        }
-    }
-
-    msg.channel_id
-        .say(
-            &ctx.http,
-            format!("Could not find role named: {:?}", potential_role_name),
-        )
-        .await?;
-
-    Ok(())
 }

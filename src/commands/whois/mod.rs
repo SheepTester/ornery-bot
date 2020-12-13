@@ -17,9 +17,9 @@ use serenity::{
 };
 
 #[group]
-#[prefix = "whois"]
-#[default_command(whois)]
-#[commands(fetch)]
+#[prefixes("whois", "who")]
+#[default_command(identify)]
+#[commands(fetch, identify)]
 #[description = "Give information about a user from a CSV file."]
 struct Whois;
 
@@ -47,11 +47,11 @@ async fn display_whois_entry(
                     message.embed(|embed| {
                         embed.description(match other_users {
                             Some(others) => if others.is_empty() {
-                                format!("What we know about <@{}> (whom I'm guessing you're referring to)", id)
+                                format!("What I know about <@{}> (whom I'm guessing you're referring to)", id)
                             } else {
-                                format!("Other possible users that you meant:\n{}\nBut here's what we know about <@{}>", others, id)
+                                format!("Other users you may have meant:\n{}\nBut here's what we know about <@{}>", others, id)
                             },
-                            None => format!("What we know about <@{}>", id)
+                            None => format!("What I know about <@{}>", id)
                         });
                         for (key, value) in doc.iter() {
                             if !key.starts_with("_") {
@@ -75,11 +75,12 @@ async fn display_whois_entry(
 }
 
 #[command]
+#[aliases("is")]
 #[usage = "<user id or name>"]
 #[example = "393248490739859458"]
 #[example = "moofy-bot"]
 /// List information about the given user from a CSV file.
-async fn whois(ctx: &Context, msg: &Message, args: Args) -> CommandResult {
+async fn identify(ctx: &Context, msg: &Message, args: Args) -> CommandResult {
     let guild = match msg.guild(&ctx.cache).await {
         Some(guild) => guild,
         None => {
@@ -98,6 +99,10 @@ async fn whois(ctx: &Context, msg: &Message, args: Args) -> CommandResult {
 
     let username_search = args.rest();
 
+    let mut tried_id = false;
+    let mut tried_member_match = false;
+    let mut tried_first_search = false;
+
     lazy_static! {
         static ref USER_ID: Regex = Regex::new(r"\d+").unwrap();
     }
@@ -107,6 +112,7 @@ async fn whois(ctx: &Context, msg: &Message, args: Args) -> CommandResult {
         if display_whois_entry(ctx, msg, &whois_data, guild_id, &id.to_string(), None).await? {
             return Ok(());
         }
+        tried_id = true;
     }
 
     ctx.shard
@@ -124,6 +130,7 @@ async fn whois(ctx: &Context, msg: &Message, args: Args) -> CommandResult {
         {
             return Ok(());
         }
+        tried_member_match = true;
     }
 
     let mut possibilities = guild.members_containing(username_search, false, true).await;
@@ -150,13 +157,37 @@ async fn whois(ctx: &Context, msg: &Message, args: Args) -> CommandResult {
         {
             return Ok(());
         }
+        tried_first_search = true;
     }
     msg.channel_id
         .send_message(&ctx.http, move |message| {
+            let tried = if tried_id || tried_member_match || tried_first_search {
+                format!(
+                    "\nI tried:{}{}{}\nbut I couldn't find anyone on this server who has a whois entry.\n\n",
+                    if tried_id {
+                        "\n- looking up the user ID/mention."
+                    } else {
+                        ""
+                    },
+                    if tried_member_match {
+                        "\n- matching the member by their exact name."
+                    } else {
+                        ""
+                    },
+                    if tried_first_search {
+                        "\n- trying the first result that somewhat resembled what you wrote."
+                    } else {
+                        ""
+                    },
+                )
+            } else {
+                String::from(" ")
+            };
             if let Some((search_result, _)) = first_guess {
-                message.content(
-                    "I don't know the person you're referring to. (Hint: Have the mods done `:whois fetch`?) Perhaps I may know these other users? If so, do `:whois <user id>`.",
-                );
+                message.content(format!(
+                    "I don't know the person you're referring to.{}(Hint: Have the mods done `:whois fetch`?) Perhaps I may know these other users? If so, do `:whois <user id>`.",
+                    tried
+                ));
                 message.embed(|embed| {
                     embed.description(format!(
                         "**<@{}> ({})\n**\n{}",
@@ -165,7 +196,10 @@ async fn whois(ctx: &Context, msg: &Message, args: Args) -> CommandResult {
                     embed
                 });
             } else {
-                message.content("I don't know the person you're referring to. (Hint: Have the mods done `:whois fetch`?)");
+                message.content(format!(
+                    "I don't know the person you're referring to.{}(Hint: It might be possible the mods have not done `:whois fetch`?)",
+                    tried
+                ));
             }
             message
         })
