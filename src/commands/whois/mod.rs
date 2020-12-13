@@ -14,12 +14,13 @@ use serenity::{
         ArgError, Args, CommandResult,
     },
     model::channel::Message,
+    utils::Colour,
 };
 
 #[group]
 #[prefixes("whois", "who")]
 #[default_command(identify)]
-#[commands(fetch, identify)]
+#[commands(fetch, identify, here, config)]
 #[description = "Give information about a user from a CSV file."]
 struct Whois;
 
@@ -35,7 +36,7 @@ async fn display_whois_entry(
         .find_one(
             doc! {
                 "_guild": guild_id,
-                "_id": id,
+                "_user": id,
             },
             None,
         )
@@ -45,6 +46,7 @@ async fn display_whois_entry(
             msg.channel_id
                 .send_message(&ctx.http, |message| {
                     message.embed(|embed| {
+                        embed.colour(Colour::MAGENTA);
                         embed.description(match other_users {
                             Some(others) => if others.is_empty() {
                                 format!("What I know about <@{}> (whom I'm guessing you're referring to)", id)
@@ -189,6 +191,7 @@ async fn identify(ctx: &Context, msg: &Message, args: Args) -> CommandResult {
                     tried
                 ));
                 message.embed(|embed| {
+                    embed.colour(Colour::MAGENTA);
                     embed.description(format!(
                         "**<@{}> ({})\n**\n{}",
                         search_result.user.id, search_result.user.id, display_matches
@@ -201,6 +204,41 @@ async fn identify(ctx: &Context, msg: &Message, args: Args) -> CommandResult {
                     tried
                 ));
             }
+            message
+        })
+        .await?;
+
+    Ok(())
+}
+
+#[command]
+#[usage = "[number of messages]"]
+#[example = ""]
+#[example = "10"]
+/// Get information about the last few people who sent messages in chat. By default, the authors of
+/// the last 5 messages are checked. The number of messages is limited by the maximum message
+/// length and the maximum number of messages I can fetch.
+async fn here(ctx: &Context, msg: &Message, mut args: Args) -> CommandResult {
+    let limit = args.single::<u64>().unwrap_or(5);
+    let messages = msg
+        .channel_id
+        .messages(&ctx.http, |retriever| retriever.before(msg.id).limit(limit))
+        .await?;
+
+    msg.channel_id
+        .send_message(&ctx.http, |message| {
+            message.embed(|embed| {
+                embed.colour(Colour::MAGENTA);
+                embed.description(
+                    messages
+                        .iter()
+                        .map(|msg| format!("<@{}>", msg.author.id))
+                        .collect::<Vec<String>>()
+                        .join("\n"),
+                );
+                embed
+            });
+            message.content("Fresh from the FBI's kitchen!");
             message
         })
         .await?;
@@ -289,7 +327,7 @@ async fn fetch(ctx: &Context, msg: &Message, mut args: Args) -> CommandResult {
                 ))
             })?
             .clone();
-        doc.insert("_id", id_value);
+        doc.insert("_user", id_value);
         data.push(doc);
     }
 
@@ -322,6 +360,90 @@ async fn fetch(ctx: &Context, msg: &Message, mut args: Args) -> CommandResult {
         .await?;
 
     msg.react(&ctx.http, '👌').await?;
+
+    Ok(())
+}
+
+const VALID_OPTION_NAMES: [&str; 3] = ["id", "url", "display"];
+
+#[command]
+#[usage = r#"<option name> "[option value]""#]
+#[example = r#"short-form "{{First Name}} {{Last Name}}""#]
+#[example = "display"]
+#[required_permissions("MANAGE_GUILD")]
+/// Set server-wide configuration options for whois output. If the option value isn't given, then
+/// the option will be returned instead of set. Here's a list of option names:
+///
+/// - `id` The field name that contains the Discord ID.
+/// - `url` The last used fetch URL for `:whois fetch`.
+/// - `display` Define the format for a summary of the whois data for a person. Use `{{field
+/// name}}` to denote field names.
+async fn config(ctx: &Context, msg: &Message, mut args: Args) -> CommandResult {
+    let guild = match msg.guild(&ctx.cache).await {
+        Some(guild) => guild,
+        None => {
+            msg.channel_id
+                .say(&ctx.http, "You aren't in a server.")
+                .await?;
+            return Ok(());
+        }
+    };
+    let guild_id = guild.id.as_u64();
+
+    let option_name = args.single::<String>()?;
+    let option_value = args.single_quoted::<String>();
+
+    if !VALID_OPTION_NAMES.contains(&option_name.as_str()) {
+        msg.channel_id
+            .say(&ctx.http, "That's not a valid option name. Do `:help whois config` for a list of valid option names.")
+            .await?;
+        return Ok(());
+    }
+
+    let data = ctx.data.read().await;
+    let db = data.get::<db::Db>().expect("Expected Db in TypeMap.");
+    let whois_settings = db.collection("whois-settings");
+
+    if let Ok(value) = option_value {
+        whois_settings
+            .update_one(
+                doc! {
+                    "_guild": guild_id,
+                },
+                doc! {
+                    "$set": {
+                        option_name: value,
+                    },
+                    "$setOnInsert": {
+                        "_guild": &guild_id,
+                    },
+                },
+                UpdateOptions::builder().upsert(true).build(),
+            )
+            .await?;
+        msg.react(&ctx.http, '👌').await?;
+    } else {
+        let settings = whois_settings
+            .find_one(doc! { "_guild": guild_id }, None)
+            .await?
+            .unwrap_or_else(|| Document::new());
+        if let Ok(value) = settings.get_str(option_name.as_str()) {
+            msg.channel_id
+                .send_message(&ctx.http, |message| {
+                    message.embed(|embed| {
+                        embed.colour(Colour::MAGENTA);
+                        embed.description(value);
+                        embed
+                    });
+                    message
+                })
+                .await?;
+        } else {
+            msg.channel_id
+                .say(&ctx.http, "This option name has not been set before.")
+                .await?;
+        }
+    }
 
     Ok(())
 }
