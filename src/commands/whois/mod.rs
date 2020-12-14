@@ -5,7 +5,7 @@ use mongodb::{
     options::UpdateOptions,
     Collection,
 };
-use regex::Regex;
+use regex::{Captures, Regex};
 use reqwest::{get, Url};
 use serenity::{
     client::{bridge::gateway::ChunkGuildFilter, Context},
@@ -19,6 +19,7 @@ use serenity::{
 
 #[group]
 #[prefixes("whois", "who")]
+#[only_in(guilds)]
 #[default_command(identify)]
 #[commands(fetch, identify, here, config)]
 #[description = "Give information about a user from a CSV file."]
@@ -211,6 +212,36 @@ async fn identify(ctx: &Context, msg: &Message, args: Args) -> CommandResult {
     Ok(())
 }
 
+async fn get_display_form(
+    whois_data: &Collection,
+    display_field: &str,
+    guild_id: &u64,
+    id: &String,
+) -> CommandResult<String> {
+    match whois_data
+        .find_one(
+            doc! {
+                "_guild": guild_id,
+                "_user": id,
+            },
+            None,
+        )
+        .await?
+    {
+        Some(doc) => {
+            lazy_static! {
+                static ref DISPLAY_FIELD: Regex = Regex::new(r"\{\{(.+?)\}\}").unwrap();
+            }
+            let display = DISPLAY_FIELD.replace_all(display_field, |captures: &Captures| {
+                let field_name = captures.get(1).map_or("", |m| m.as_str());
+                doc.get_str(field_name).unwrap_or("")
+            });
+            Ok(String::from(display))
+        }
+        None => Ok(format!("[<@{}> not known]", id)),
+    }
+}
+
 #[command]
 #[usage = "[number of messages]"]
 #[example = ""]
@@ -219,26 +250,62 @@ async fn identify(ctx: &Context, msg: &Message, args: Args) -> CommandResult {
 /// the last 5 messages are checked. The number of messages is limited by the maximum message
 /// length and the maximum number of messages I can fetch.
 async fn here(ctx: &Context, msg: &Message, mut args: Args) -> CommandResult {
+    let guild_id = match msg.guild_id {
+        Some(id) => id.as_u64().to_owned(),
+        None => {
+            msg.channel_id
+                .say(&ctx.http, "You aren't in a server.")
+                .await?;
+            return Ok(());
+        }
+    };
+
     let limit = args.single::<u64>().unwrap_or(5);
     let messages = msg
         .channel_id
         .messages(&ctx.http, |retriever| retriever.before(msg.id).limit(limit))
         .await?;
 
+    let data = ctx.data.read().await;
+    let db = data.get::<db::Db>().expect("Expected Db in TypeMap.");
+    let whois_data = db.collection("whois-data");
+    let whois_settings = db.collection("whois-settings");
+
+    let settings = whois_settings
+        .find_one(doc! { "_guild": guild_id }, None)
+        .await?
+        .unwrap_or_else(|| Document::new());
+    let display_field = settings.get_str("display").unwrap_or("<@{{_user}}>");
+
+    let mut names = Vec::new();
+    let mut total_length: usize = 0;
+    for msg in &messages {
+        let display = get_display_form(
+            &whois_data,
+            display_field,
+            &guild_id,
+            &msg.author.id.to_string(),
+        )
+        .await?;
+        // Include an extra character for the newline
+        if total_length + display.len() + 1 < 2000 - 5 {
+            total_length += display.len() + 1;
+            names.push(display);
+        } else {
+            names.push(String::from("[...]"));
+            break;
+        }
+    }
+    names.reverse();
+
     msg.channel_id
         .send_message(&ctx.http, |message| {
             message.embed(|embed| {
                 embed.colour(Colour::MAGENTA);
-                embed.description(
-                    messages
-                        .iter()
-                        .map(|msg| format!("<@{}>", msg.author.id))
-                        .collect::<Vec<String>>()
-                        .join("\n"),
-                );
+                embed.description(names.join("\n"));
                 embed
             });
-            message.content("Fresh from the FBI's kitchen!");
+            message.content("Here, allow me to introduce you:");
             message
         })
         .await?;
@@ -255,8 +322,8 @@ async fn here(ctx: &Context, msg: &Message, mut args: Args) -> CommandResult {
 /// which Discord user corresponds to which entry. Both arguments are optional and will use the
 /// last given URL/ID field. Requires that you can manage the guild (the MANAGE_GUILD permission).
 async fn fetch(ctx: &Context, msg: &Message, mut args: Args) -> CommandResult {
-    let guild = match msg.guild(&ctx.cache).await {
-        Some(guild) => guild,
+    let guild_id = match msg.guild_id {
+        Some(id) => id.as_u64().to_owned(),
         None => {
             msg.channel_id
                 .say(&ctx.http, "You aren't in a server.")
@@ -264,7 +331,6 @@ async fn fetch(ctx: &Context, msg: &Message, mut args: Args) -> CommandResult {
             return Ok(());
         }
     };
-    let guild_id = guild.id.as_u64();
 
     let data = ctx.data.read().await;
     let db = data.get::<db::Db>().expect("Expected Db in TypeMap.");
@@ -368,7 +434,7 @@ const VALID_OPTION_NAMES: [&str; 3] = ["id", "url", "display"];
 
 #[command]
 #[usage = r#"<option name> "[option value]""#]
-#[example = r#"short-form "{{First Name}} {{Last Name}}""#]
+#[example = r#"display "{{First Name}} {{Last Name}}""#]
 #[example = "display"]
 #[required_permissions("MANAGE_GUILD")]
 /// Set server-wide configuration options for whois output. If the option value isn't given, then
@@ -379,8 +445,8 @@ const VALID_OPTION_NAMES: [&str; 3] = ["id", "url", "display"];
 /// - `display` Define the format for a summary of the whois data for a person. Use `{{field
 /// name}}` to denote field names.
 async fn config(ctx: &Context, msg: &Message, mut args: Args) -> CommandResult {
-    let guild = match msg.guild(&ctx.cache).await {
-        Some(guild) => guild,
+    let guild_id = match msg.guild_id {
+        Some(id) => id.as_u64().to_owned(),
         None => {
             msg.channel_id
                 .say(&ctx.http, "You aren't in a server.")
@@ -388,7 +454,6 @@ async fn config(ctx: &Context, msg: &Message, mut args: Args) -> CommandResult {
             return Ok(());
         }
     };
-    let guild_id = guild.id.as_u64();
 
     let option_name = args.single::<String>()?;
     let option_value = args.single_quoted::<String>();

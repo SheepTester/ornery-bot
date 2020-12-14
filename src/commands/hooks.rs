@@ -63,7 +63,7 @@ pub async fn normal_message(ctx: &Context, msg: &Message) {
     if msg.content.starts_with("bruh who is ") {
         let _ = msg
             .channel_id
-            .say(&ctx.http, r#"Hey, I have matured and am no longer "emo." You may now continue using `:whois`."#)
+            .say(&ctx.http, r#"Hey, I have matured and am no longer "emo." Please use `:whois` so I do not cringe at my old ways."#)
             .await;
     } else if MENTIONED_MOOFY.is_match(&msg.content) {
         let _ = msg.react(&ctx.http, '👀').await;
