@@ -60,14 +60,10 @@ pub async fn normal_message(ctx: &Context, msg: &Message) {
             .build()
             .unwrap();
     }
-    if msg.content.starts_with("bruh who is ") {
-        let _ = msg
-            .channel_id
-            .say(&ctx.http, r#"Hey, I have matured and am no longer "emo." Please use `:whois` so I do not cringe at my old ways."#)
-            .await;
-    } else if MENTIONED_MOOFY.is_match(&msg.content) {
+    if MENTIONED_MOOFY.is_match(&msg.content) {
         let _ = msg.react(&ctx.http, '👀').await;
-    } else if let Ok(true) = msg.mentions_me(&ctx.http).await {
+    }
+    if let Ok(true) = msg.mentions_me(&ctx.http).await {
         let _ = msg
             .channel_id
             .say(&ctx.http, "<:ping:719277539113041930>")

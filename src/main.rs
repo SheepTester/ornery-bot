@@ -90,7 +90,8 @@ async fn main() {
         .configure(|c| {
             c.with_whitespace(true)
                 .on_mention(Some(bot_id))
-                .prefix(prefix.as_str())
+                .prefixes(vec![prefix.as_str(), "bruh", "brüh"])
+                .with_whitespace((true, true, true))
                 // Sets the bot's owners. These will be used for commands that
                 // are owners only.
                 .owners(owners)
