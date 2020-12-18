@@ -1,3 +1,4 @@
+use mongodb::bson::doc;
 use serenity::{
     client::{
         bridge::gateway::{ShardId, ShardManager},
@@ -9,11 +10,13 @@ use serenity::{
     },
     model::{channel::Message, permissions::Permissions},
     prelude::{Mutex, TypeMapKey},
-    utils::{content_safe, ContentSafeOptions},
+    utils::{content_safe, Colour, ContentSafeOptions},
 };
 use std::{collections::HashMap, fmt::Write, sync::Arc};
+use tokio::stream::StreamExt;
 
 use super::checks::OWNER_CHECK;
+use crate::db;
 
 // A container type is created for inserting into the Client's `data`, which
 // allows for data to be accessible across all events and framework commands, or
@@ -31,7 +34,16 @@ impl TypeMapKey for CommandCounter {
 }
 
 #[group]
-#[commands(about, am_i_admin, say, commands, ping, latency, some_long_command)]
+#[commands(
+    about,
+    am_i_admin,
+    say,
+    commands,
+    ping,
+    latency,
+    some_long_command,
+    whopinged
+)]
 #[description = "All the top-level commands you can use without using a quote-unquote \"prefix.\""]
 struct General;
 
@@ -180,6 +192,93 @@ async fn am_i_admin(ctx: &Context, msg: &Message, _args: Args) -> CommandResult 
     }
 
     msg.channel_id.say(&ctx.http, "No, you are not.").await?;
+
+    Ok(())
+}
+
+#[command]
+#[only_in(guilds)]
+#[aliases("whoping", "quienmehahechoping")]
+/// Lists your last pings (assuming Moofy has been paying attention).
+async fn whopinged(ctx: &Context, msg: &Message) -> CommandResult {
+    let guild_id = match msg.guild_id {
+        Some(id) => id.as_u64().to_owned(),
+        None => {
+            msg.channel_id
+                .say(&ctx.http, "You aren't in a server.")
+                .await?;
+            return Ok(());
+        }
+    };
+
+    let data = ctx.data.read().await;
+    let db = data.get::<db::Db>().expect("Expected Db in TypeMap.");
+    let past_pings = db.collection("past-pings");
+
+    // TODO: Role pings?
+    let mut settings = past_pings
+        .find(
+            doc! {
+                "guild": guild_id,
+                "$or": [
+                    { "everyone": true },
+                    { "user": &msg.author.id.as_u64() },
+                ]
+            },
+            None,
+        )
+        .await?;
+
+    let mut fields: Vec<(&str, String)> = Vec::new();
+    while let Some(doc_result) = settings.next().await {
+        let doc = doc_result?;
+        let trimmed_content = {
+            // Insert zero width space between ] and ( to prevent hiding messages in link URLs
+            let content = doc.get_str("content")?.replace("](", "]\u{200b}(");
+            if content.len() < 2000 - 70 {
+                content
+            } else {
+                String::from(&content[0..(2000 - 70)])
+            }
+        };
+        let author_id = doc.get_i64("author").unwrap_or(0);
+        let channel_id = doc.get_i64("channel_id").unwrap_or(0);
+        let message_id = doc.get_i64("message_id").unwrap_or(0);
+        if let Some(_) = doc.get("everyone") {
+            fields.push((
+                "Last @everyone",
+                format!(
+                    "[<@{}> pinged you](https://discord.com/channels/{}/{}/{})\n\n{}",
+                    author_id, guild_id, channel_id, message_id, trimmed_content
+                ),
+            ));
+        } else if let Some(_) = doc.get("user") {
+            fields.push((
+                "Last direct @mention",
+                format!(
+                    "[<@{}> pinged you](https://discord.com/channels/{}/{}/{})\n\n{}",
+                    author_id, guild_id, channel_id, message_id, trimmed_content
+                ),
+            ));
+        }
+    }
+
+    msg.channel_id
+        .send_message(&ctx.http, |message| {
+            message.embed(|embed| {
+                embed.title("Who DARED to ping thee?");
+                embed.colour(Colour::MAGENTA);
+                for (title, value) in fields {
+                    embed.field(title, value, false);
+                }
+                embed
+            });
+            message.content(
+                "Tip: Discord has an inbox (ctrl/command + i) with a list of your past mentions.",
+            );
+            message
+        })
+        .await?;
 
     Ok(())
 }
