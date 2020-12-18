@@ -16,11 +16,12 @@ use serenity::{
     model::channel::Message,
     utils::Colour,
 };
+use tokio::stream::StreamExt;
 
 #[group]
 #[prefixes("webtoon", "webtoons")]
 #[only_in(guilds)]
-#[commands(add, remove, check)]
+#[commands(add, remove, check, list)]
 #[description = "Quickly fetch the latest Webtoons."]
 struct Webtoon;
 
@@ -148,7 +149,11 @@ const RANDOM_MESSAGE: [&str; 3] = [
 
 /// Returns `Ok(true)` if the Webtoon ID doesn't exist. This way, the error is only triggered when
 /// using the long form `:webtoon check`.
-pub async fn check_webtoon(ctx: &Context, msg: &Message, webtoon_id: &String) -> CommandResult<bool> {
+pub async fn check_webtoon(
+    ctx: &Context,
+    msg: &Message,
+    webtoon_id: &String,
+) -> CommandResult<bool> {
     let guild_id = match msg.guild_id {
         Some(id) => id.as_u64().to_owned(),
         None => {
@@ -183,6 +188,7 @@ pub async fn check_webtoon(ctx: &Context, msg: &Message, webtoon_id: &String) ->
                 .find(Name("h1").and(Class("subj")))
                 .next()
                 .map_or_else(|| String::from("[Couldn't get title]"), |node| node.text());
+            // Sadly, Webtoons checks for the Referer header for image URLs.
             let first_image = html
                 .find(
                     Class("detail_lst")
@@ -272,6 +278,57 @@ async fn check(ctx: &Context, msg: &Message, mut args: Args) -> CommandResult {
             })
             .await?;
     }
+
+    Ok(())
+}
+
+#[command]
+#[usage = ""]
+#[example = ""]
+/// Lists some Webtoon IDs added in the server.
+async fn list(ctx: &Context, msg: &Message) -> CommandResult {
+    let guild_id = match msg.guild_id {
+        Some(id) => id.as_u64().to_owned(),
+        None => {
+            msg.channel_id
+                .say(&ctx.http, "You aren't in a server.")
+                .await?;
+            return Ok(());
+        }
+    };
+
+    let data = ctx.data.read().await;
+    let db = data.get::<db::Db>().expect("Expected Db in TypeMap.");
+    let webtoons = db.collection("webtoons");
+
+    let mut docs_cursor = webtoons
+        .find(
+            doc! {
+                "guild": guild_id,
+            },
+            None,
+        )
+        .await?;
+    let mut webtoon_ids = Vec::new();
+    while let Some(doc_result) = docs_cursor.next().await {
+        let doc = doc_result?;
+        if let (Ok(id), Ok(url)) = (doc.get_str("id"), doc.get_str("url")) {
+            webtoon_ids.push(format!("[`{}`]({})", id, url));
+        }
+    }
+    msg.channel_id.send_message(&ctx.http, |message| {
+        message.embed(|embed| {
+            let ids = webtoon_ids.join("\n");
+            embed.description(if ids.len() > 2000 {
+                format!("{}\n[...]", &ids[0..(2000 - 6)])
+            } else {
+                ids
+            });
+            embed
+        });
+        message.content("Use `:webtoon check <id>` to check on an individual Webtoon by ID.\n\nTip: For most Webtoon IDs, you can simply just do `:<id>`.");
+        message
+    }).await?;
 
     Ok(())
 }
