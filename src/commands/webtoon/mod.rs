@@ -319,7 +319,9 @@ async fn list(ctx: &Context, msg: &Message) -> CommandResult {
     msg.channel_id.send_message(&ctx.http, |message| {
         message.embed(|embed| {
             let ids = webtoon_ids.join("\n");
-            embed.description(if ids.len() > 2000 {
+            embed.description(if ids.is_empty() {
+                String::from("No Webtoons have been added. The server's mods should do `:webtoon add <id> <url>` to add some Webtoons.")
+            } else if ids.len() > 2000 {
                 format!("{}\n[...]", &ids[0..(2000 - 6)])
             } else {
                 ids
