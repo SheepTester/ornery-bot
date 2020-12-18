@@ -1,6 +1,7 @@
-use crate::db;
+use crate::{db, commands::webtoon::check_webtoon};
 use lazy_static::lazy_static;
 use mongodb::{bson::doc, options::UpdateOptions};
+use rand::Rng;
 use regex::{Regex, RegexBuilder};
 use serenity::{
     client::Context,
@@ -38,11 +39,21 @@ pub async fn after(
             .channel_id
             .send_message(&ctx.http, |message| {
                 message.embed(|embed| {
-                    embed.description(format!("```rs\n{:?}\n```", why));
+                    embed.description(format!(
+                        "Error from `{}`:```rs\n{:#?}\n```",
+                        command_name, why
+                    ));
                     embed.colour(Colour::RED);
                     embed
                 });
-                message.content(format!("Command '{}' returned error", command_name));
+                let mut rng = rand::thread_rng();
+                message.content(if rng.gen_ratio(1, 100) {
+                    "OOPSIE WOOPSIE!! 🙊 Uwu We make a wucky 🥺!! A wittle fucko boingo! The \
+                    code 👩‍💻 monkeys 🐒 🐵 at our headquarters are working 💦 VEWY HAWD to fix \
+                    🔨 🛠 ⚒ this!"
+                } else {
+                    "An error occurred. :("
+                });
                 message
             })
             .await;
@@ -182,8 +193,16 @@ pub async fn dispatch_error(ctx: &Context, msg: &Message, error: DispatchError) 
             .channel_id
             .say(
                 &ctx.http,
-                &format!("Try this again in {} seconds.", duration.as_secs()),
+                &format!(
+                    "You got ratelimited! Try again in {} seconds.",
+                    duration.as_secs()
+                ),
             )
             .await;
     }
+}
+
+#[hook]
+pub async fn unrecognised_command(ctx: &Context, msg: &Message, unrecognised_command_name: &str) {
+    let _ = check_webtoon(ctx, msg, &String::from(unrecognised_command_name)).await;
 }

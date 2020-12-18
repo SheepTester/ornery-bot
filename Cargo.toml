@@ -13,6 +13,8 @@ serde_json = "1.0"
 csv = "1.1"
 regex = "1"
 lazy_static = "1.4.0"
+select = "0.5.0"
+rand = "0.7.3"
 
 [dependencies.serenity]
 version = "0.9"

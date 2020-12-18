@@ -118,6 +118,7 @@ async fn main() {
         .on_dispatch_error(hooks::dispatch_error)
         .normal_message(hooks::normal_message)
         .prefix_only(hooks::normal_message)
+        .unrecognised_command(hooks::unrecognised_command)
         // Can't be used more than once per 5 seconds:
         .bucket("emoji", |b| b.delay(5))
         .await
@@ -131,6 +132,7 @@ async fn main() {
         .group(&commands::general::GENERAL_GROUP)
         .group(&commands::test::TEST_GROUP)
         .group(&commands::whois::WHOIS_GROUP)
+        .group(&commands::webtoon::WEBTOON_GROUP)
         .group(&commands::emoji::EMOJI_GROUP)
         .group(&commands::math::MATH_GROUP)
         .group(&commands::owner::OWNER_GROUP);

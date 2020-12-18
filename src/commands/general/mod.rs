@@ -116,7 +116,20 @@ async fn some_long_command(ctx: &Context, msg: &Message, args: Args) -> CommandR
 /// Allow me to introduce myself.
 async fn about(ctx: &Context, msg: &Message) -> CommandResult {
     msg.channel_id
-        .say(&ctx.http, "Hi, I'm Moofy (he, him, etc.) running ornery-bot 0.9.\n\nLike any good bot, I am a proud open-source bot: https://github.com/SheepTester/ornery-bot")
+        .send_message(&ctx.http, |message| {
+            message.embed(|embed| {
+                embed.title("Links");
+                embed.description("Like any good bot, I am proudly open-sourced on [Github]\
+                (https://github.com/SheepTester/ornery-bot).\n\nIf you really want me on your \
+                server, here's [my invite link](https://discord.com/api/oauth2/\
+                authorize?client_id=393248490739859458&scope=bot).\n\nCheck out my bot buddy, \
+                [RBot](https://github.com/ky28059/RBot/)!");
+                embed.colour(Colour::MAGENTA);
+                embed
+            });
+            message.content("Hi! I'm Moofy (he, him, etc.), running ornery-bot 1.0, made with Serenity 0.9 in Rust.");
+            message
+        })
         .await?;
 
     Ok(())
@@ -199,6 +212,8 @@ async fn am_i_admin(ctx: &Context, msg: &Message, _args: Args) -> CommandResult 
 #[command]
 #[only_in(guilds)]
 #[aliases("whoping", "quienmehahechoping")]
+#[usage = ""]
+#[example = ""]
 /// Lists your last pings (assuming Moofy has been paying attention).
 async fn whopinged(ctx: &Context, msg: &Message) -> CommandResult {
     let guild_id = match msg.guild_id {
